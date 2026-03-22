@@ -42,6 +42,12 @@
         "path": "./syntaxes/stata.tmLanguage.json"
       }
     ],
+    "snippets": [
+      {
+        "language": "stata",
+        "path": "./snippets/stata.json"
+      }
+    ],
     "commands": [
       { "command": "stata.openConsole", "title": "Open Stata Console", "category": "Stata" },
       { "command": "stata.run", "title": "Run Selection or Do-file", "category": "Stata" },
@@ -107,7 +113,8 @@
       {
         "id": "stata",
         "aliases": ["Stata", "stata"],
-        "extensions": [".do", ".ado", ".mata", ".sthlp"]
+        "extensions": [".do", ".ado", ".mata", ".sthlp"],
+        "configuration": "./language-configuration.json"
       }
     ],
     "configuration": {

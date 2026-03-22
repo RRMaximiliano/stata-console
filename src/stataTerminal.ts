@@ -4,11 +4,15 @@ import * as path from 'path';
 import * as os from 'os';
 import { StataProcess } from './stataProcess';
 
+// Terminal colors — inspired by Stata's Results window
 const C = {
-    prompt: '\x1b[38;2;28;168;88m',
-    cmd:    '\x1b[38;2;28;168;88m',
-    err:    '\x1b[38;2;204;0;0m',
-    dim:    '\x1b[90m',
+    prompt: '\x1b[38;2;78;154;106m',      // muted green for ". " prompt
+    cmd:    '\x1b[38;2;86;156;214m',       // soft blue for echoed commands (like Stata)
+    err:    '\x1b[38;2;204;62;68m',        // red for errors
+    errBg:  '\x1b[38;2;204;62;68m',        // red text for error context
+    table:  '\x1b[38;2;180;180;180m',      // light gray for table separators
+    dim:    '\x1b[38;2;120;120;120m',      // dim for chrome/info
+    bold:   '\x1b[1m',                     // bold
     reset:  '\x1b[0m',
 };
 
@@ -66,10 +70,10 @@ export class StataTerminal implements vscode.Pseudoterminal {
         const metaPath = path.join(this.tempDir, '_meta.txt');
         const resultsPath = path.join(this.tempDir, '_results.tsv');
         const code = [
-            // 1. Graph export
-            `capture graph export "${this.graphPath}", as(png) width(800) replace`,
+            // Graph export is now injected inline after each graph command
+            // in doSendCode, so we don't need it here.
 
-            // 2. Dataset metadata
+            // 1. Dataset metadata
             `capture file close _vsc_mh`,
             `local _vsc_obs = _N`,
             `local _vsc_k = c(k)`,
@@ -116,20 +120,6 @@ export class StataTerminal implements vscode.Pseudoterminal {
         fs.writeFileSync(postDoFile, code, 'utf-8');
     }
 
-    /** Pre-create the browse export do-file template */
-    private writeBrowseDoFile(csvPath: string, countPath: string, exportArgs: string): string {
-        const browseDoFile = path.join(this.tempDir, '_browse.do');
-        const code = [
-            `capture file close _vsc_fh`,
-            `capture file open _vsc_fh using "${countPath}", write replace`,
-            `capture file write _vsc_fh (_N)`,
-            `capture file close _vsc_fh`,
-            `capture export delimited${exportArgs} using "${csvPath}", replace`,
-        ].join('\n');
-        fs.writeFileSync(browseDoFile, code, 'utf-8');
-        return browseDoFile;
-    }
-
     private cleanupOldSessions(): void {
         try {
             const tmpBase = os.tmpdir();
@@ -151,13 +141,15 @@ export class StataTerminal implements vscode.Pseudoterminal {
         this.isOpen = true;
 
         this.out(
-            `${C.dim}  ___  ____  ____  ____  ____ \xAE\r\n` +
-            ` /__    /   ____/   /   ____/\r\n` +
-            ` ___/   /   /___/   /   /___/   Stata Console for VS Code\r\n` +
-            `${C.reset}\r\n` +
-            `${C.dim} Cmd+Shift+D  Execute do-file / selection\r\n` +
-            ` Cmd+Enter    Execute current line\r\n` +
-            ` Ctrl+C       Break${C.reset}\r\n\r\n`
+            `\r\n` +
+            `${C.cmd}  ___  ____  ____  ____  ____ \xAE${C.reset}\r\n` +
+            `${C.cmd} /__    /   ____/   /   ____/${C.reset}\r\n` +
+            `${C.cmd} ___/   /   /___/   /   /___/${C.reset}   ${C.bold}Stata Console${C.reset}\r\n` +
+            `\r\n` +
+            `${C.dim} \u2318\u21E7D   Run do-file / selection\r\n` +
+            ` \u2318\u21A9    Run current line\r\n` +
+            ` \u2318L    Clear console\r\n` +
+            ` \u2303C    Break${C.reset}\r\n\r\n`
         );
 
         this.stataProcess.on('output', (data: string) => {
@@ -220,7 +212,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
                     if (this.history.length > 1000) { this.history.shift(); }
                 }
 
-                // Intercept browse
+                // Intercept browse/edit — not available in console mode
                 const browseMatch = command.trim().match(BROWSE_RE);
                 if (browseMatch) {
                     this.handleBrowse(browseMatch[2]?.trim() || '');
@@ -252,7 +244,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
         this.out(data);
     }
 
-    // --- Browse command ---
+    // --- Browse (interactive only) ---
 
     handleBrowse(args: string): void {
         this.out(`${C.dim}(opening Data Viewer...)${C.reset}\r\n`);
@@ -262,11 +254,16 @@ export class StataTerminal implements vscode.Pseudoterminal {
         try { fs.unlinkSync(csvPath); } catch { /* ignore */ }
         try { fs.unlinkSync(countPath); } catch { /* ignore */ }
 
-        let exportArgs = args ? ' ' + args : '';
-
-        const browseDoFile = this.writeBrowseDoFile(csvPath, countPath, exportArgs);
-
-        // `run` is identical to `do` but produces ZERO output — completely silent
+        const exportArgs = args ? ' ' + args : '';
+        const browseDoFile = path.join(this.tempDir, '_browse.do');
+        const code = [
+            `capture file close _vsc_fh`,
+            `capture file open _vsc_fh using "${countPath}", write replace`,
+            `capture file write _vsc_fh (_N)`,
+            `capture file close _vsc_fh`,
+            `capture export delimited${exportArgs} using "${csvPath}", replace`,
+        ].join('\n');
+        fs.writeFileSync(browseDoFile, code, 'utf-8');
         this.stataProcess.write(`run "${browseDoFile}"`);
 
         this.waitForFile(csvPath, 500).then(() => {
@@ -277,7 +274,6 @@ export class StataTerminal implements vscode.Pseudoterminal {
             this.browseEmitter.fire({ csvPath, totalObs });
             this.showPrompt();
         }).catch(() => {
-            // No data — open empty viewer (like Stata does)
             this.browseEmitter.fire({ csvPath: '', totalObs: 0 });
             this.showPrompt();
         });
@@ -295,9 +291,53 @@ export class StataTerminal implements vscode.Pseudoterminal {
 
     private doSendCode(code: string, workingDir?: string): void {
         this.recentInteractiveCmds = [];
-        // Track mtime so we know when the file is updated (not just existing)
         this.lastGraphMtime = this.getFileMtime(this.graphPath);
         this.lastVarsMtime = this.getFileMtime(this.varsPath);
+
+        // Delete old browse CSV so watcher can detect a new one
+        try { fs.unlinkSync(path.join(this.tempDir, '_browse.csv')); } catch { /* ignore */ }
+
+        // Process lines: replace browse/edit (not available in console mode),
+        // inject graph export after graph commands
+        const csvPath = path.join(this.tempDir, '_browse.csv');
+        const countPath = path.join(this.tempDir, '_count.txt');
+        const sourceLines = code.split(/\r?\n/);
+        const outputLines: string[] = [];
+        let inGraphCmd = false;
+
+        for (const line of sourceLines) {
+            const trimmed = line.trim();
+
+            // Replace browse/edit with inline export (respects error-stop)
+            const browseMatch = trimmed.match(BROWSE_RE);
+            if (browseMatch) {
+                const exportArgs = browseMatch[2]?.trim() || '';
+                const exportCmd = exportArgs
+                    ? `capture export delimited ${exportArgs} using "${csvPath}", replace`
+                    : `capture export delimited using "${csvPath}", replace`;
+                outputLines.push(`* browse — opening in VS Code Data Viewer`);
+                outputLines.push(`capture file close _vsc_fh`);
+                outputLines.push(`capture file open _vsc_fh using "${countPath}", write replace`);
+                outputLines.push(`capture file write _vsc_fh (_N)`);
+                outputLines.push(`capture file close _vsc_fh`);
+                outputLines.push(exportCmd);
+                continue;
+            }
+
+            outputLines.push(line);
+
+            // Detect graph-producing commands to inject export after each
+            const isContinuation = trimmed.endsWith('///');
+            if (!inGraphCmd && this.isGraphCommand(trimmed)) {
+                inGraphCmd = true;
+            }
+            if (inGraphCmd && !isContinuation) {
+                inGraphCmd = false;
+                outputLines.push(
+                    `capture quietly graph export "${this.graphPath}", as(png) width(800) replace`
+                );
+            }
+        }
 
         const tempFile = path.join(this.tempDir, `_run_${++this.tempCounter}.do`);
 
@@ -305,13 +345,14 @@ export class StataTerminal implements vscode.Pseudoterminal {
         if (workingDir) {
             fullCode += `cd "${workingDir}"\n`;
         }
-        fullCode += code + '\n';
+        fullCode += outputLines.join('\n') + '\n';
 
         fs.writeFileSync(tempFile, fullCode, 'utf-8');
+        // `do file` stops on error by default. `do file, nostop` would continue.
+        // Using plain `do` ensures Stata-like error behavior.
         this.stataProcess.write(`do "${tempFile}"`);
 
-        // After user's do-file, silently run graph export + variable metadata.
-        // `run` produces ZERO output and runs fast since it's not echo'd.
+        // Silently run variable metadata
         const postDoFile = path.join(this.tempDir, '_post.do');
         this.stataProcess.write(`run "${postDoFile}"`);
 
@@ -402,24 +443,35 @@ export class StataTerminal implements vscode.Pseudoterminal {
             }
 
             // --- Colorize ---
+
+            // Error codes: r(123);
             if (/^r\(\d+\);/.test(stripped)) {
                 result.push(`${C.err}${line}${C.reset}`);
                 inError = false;
                 continue;
             }
 
+            // Continuation of error block
             if (inError) {
-                result.push(`${C.err}${line}${C.reset}`);
+                result.push(`${C.errBg}${line}${C.reset}`);
                 if (/^r\(\d+\);/.test(stripped)) { inError = false; }
                 continue;
             }
 
-            if (/^(invalid |unrecognized |unknown |variable .* not found|no variables defined|option .* not allowed|type mismatch|last estimates not found|no observations)/.test(stripped)) {
+            // Error preamble keywords
+            if (/^(invalid |unrecognized |unknown |command .* is unrecognized|variable .* not found|no variables defined|option .* not allowed|type mismatch|last estimates not found|no observations|not possible|too few|too many|may not|does not|cannot )/.test(stripped)) {
                 result.push(`${C.err}${line}${C.reset}`);
                 inError = true;
                 continue;
             }
 
+            // Table separator lines (---+--- or ===+===)
+            if (/^[-=+|]+$/.test(stripped) || /^[-]+\+[-]+/.test(stripped)) {
+                result.push(`${C.table}${line}${C.reset}`);
+                continue;
+            }
+
+            // Echoed commands: ". command"
             if (/^\. /.test(stripped) || stripped === '.') {
                 result.push(`${C.cmd}${line}${C.reset}`);
                 continue;
@@ -479,6 +531,23 @@ export class StataTerminal implements vscode.Pseudoterminal {
                         this.resultsUpdatedEmitter.fire();
                     }, 50);
                 }
+
+                // Browse CSV written by inline export in do-file
+                if (filename === '_browse.csv') {
+                    setTimeout(() => {
+                        const browseCsv = path.join(this.tempDir, '_browse.csv');
+                        const browseCount = path.join(this.tempDir, '_count.txt');
+                        if (fs.existsSync(browseCsv)) {
+                            let totalObs: number | undefined;
+                            try {
+                                if (fs.existsSync(browseCount)) {
+                                    totalObs = parseInt(fs.readFileSync(browseCount, 'utf-8').trim(), 10) || undefined;
+                                }
+                            } catch { /* ignore */ }
+                            this.browseEmitter.fire({ csvPath: browseCsv, totalObs });
+                        }
+                    }, 100);
+                }
             });
         } catch { /* ignore — watchers are best-effort */ }
     }
@@ -501,6 +570,20 @@ export class StataTerminal implements vscode.Pseudoterminal {
             }
         } catch { /* ignore */ }
         return { obs, vars, filename, label };
+    }
+
+    /** Check if a line starts a graph-producing Stata command */
+    private isGraphCommand(line: string): boolean {
+        // Strip leading dot (echoed commands) and whitespace
+        const s = line.replace(/^\.\s*/, '').trim().toLowerCase();
+        if (!s || s.startsWith('*') || s.startsWith('//')) { return false; }
+
+        // Graph subcommands that DON'T produce plots
+        if (/^graph\s+(export|save|describe|dir|drop|rename|display|query|set|use)\b/.test(s)) {
+            return false;
+        }
+
+        return /^(scatter|histogram|hist|kdensity|twoway|tw|graph\s+(bar|box|pie|dot|hbar|combine|matrix|twoway)|coefplot|binscatter|marginsplot|sts\s+graph|stcurve|qnorm|pnorm|qqplot|gladder|lowess|lpoly)\b/.test(s);
     }
 
     // --- History navigation ---

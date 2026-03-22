@@ -8,6 +8,7 @@ import { DatasetPanel } from './datasetPanel';
 import { StoredResultsPanel } from './storedResultsPanel';
 import { PlotsListPanel } from './plotsListPanel';
 import { StataCompletionProvider } from './completionProvider';
+import { StataHoverProvider } from './hoverProvider';
 import { getStataPath } from './config';
 
 let stataTerminal: StataTerminal | undefined;
@@ -265,12 +266,16 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Auto-completion for Stata commands
+    // Auto-completion and hover help for Stata commands
     context.subscriptions.push(
         vscode.languages.registerCompletionItemProvider(
             { language: 'stata' },
             new StataCompletionProvider()
-        )
+        ),
+        vscode.languages.registerHoverProvider(
+            { language: 'stata' },
+            new StataHoverProvider()
+        ),
     );
 }
 
