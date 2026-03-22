@@ -9,6 +9,7 @@ import { StoredResultsPanel } from './storedResultsPanel';
 import { PlotsListPanel } from './plotsListPanel';
 import { StataCompletionProvider } from './completionProvider';
 import { StataHoverProvider } from './hoverProvider';
+import { StataLinkProvider } from './linkProvider';
 import { getStataPath } from './config';
 
 let stataTerminal: StataTerminal | undefined;
@@ -275,6 +276,10 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.languages.registerHoverProvider(
             { language: 'stata' },
             new StataHoverProvider()
+        ),
+        vscode.languages.registerDocumentLinkProvider(
+            { language: 'stata' },
+            new StataLinkProvider()
         ),
     );
 }
