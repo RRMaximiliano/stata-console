@@ -1,0 +1,150 @@
+{
+  "name": "stata-console",
+  "displayName": "Stata Console",
+  "description": "Interactive Stata console embedded in VS Code — terminal, data viewer, variables panel, plots",
+  "version": "0.3.0",
+  "publisher": "stata-console",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:stata",
+    "onCommand:stata.openConsole"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "stata-explorer",
+          "title": "Stata",
+          "icon": "resources/stata-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "stata-explorer": [
+        { "id": "stataDataset", "name": "Data" },
+        { "id": "stataVariables", "name": "Variables" },
+        { "id": "stataStoredResults", "name": "Stored Results" },
+        { "id": "stataPlotsList", "name": "Plots" }
+      ]
+    },
+    "grammars": [
+      {
+        "language": "stata",
+        "scopeName": "source.stata",
+        "path": "./syntaxes/stata.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      { "command": "stata.openConsole", "title": "Open Stata Console", "category": "Stata" },
+      { "command": "stata.run", "title": "Run Selection or Do-file", "category": "Stata" },
+      { "command": "stata.runSelection", "title": "Run Selection/Line", "category": "Stata" },
+      { "command": "stata.runFile", "title": "Run Current File", "category": "Stata" },
+      { "command": "stata.clearConsole", "title": "Clear Console", "category": "Stata" },
+      { "command": "stata.restartStata", "title": "Restart Stata", "category": "Stata" },
+      { "command": "stata.browse", "title": "Browse Data", "category": "Stata", "enablement": "stata.consoleActive" },
+      { "command": "stata.insertVariable", "title": "Insert Variable Name", "category": "Stata" },
+      { "command": "stata.plotPrev", "title": "Previous Plot", "category": "Stata", "enablement": "stata.consoleActive" },
+      { "command": "stata.plotNext", "title": "Next Plot", "category": "Stata", "enablement": "stata.consoleActive" },
+      { "command": "stata.plotSave", "title": "Save Plot As...", "category": "Stata", "enablement": "stata.consoleActive" },
+      { "command": "stata.showPlot", "title": "Show Plot", "category": "Stata" },
+      { "command": "stata.refreshVariables", "title": "Refresh Variables", "category": "Stata", "icon": "$(refresh)", "enablement": "stata.consoleActive" }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "stata.refreshVariables",
+          "when": "view == stataVariables",
+          "group": "navigation"
+        },
+        {
+          "command": "stata.browse",
+          "when": "view == stataDataset",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "stata.runSelection",
+          "when": "editorTextFocus && resourceExtname =~ /\\.(do|ado|mata)$/",
+          "group": "stata@1"
+        },
+        {
+          "command": "stata.run",
+          "when": "editorTextFocus && resourceExtname =~ /\\.(do|ado|mata)$/",
+          "group": "stata@2"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "stata.run",
+        "key": "ctrl+shift+d",
+        "mac": "cmd+shift+d",
+        "when": "editorTextFocus && resourceExtname =~ /\\.(do|ado|mata)$/"
+      },
+      {
+        "command": "stata.runSelection",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && resourceExtname =~ /\\.(do|ado|mata)$/"
+      },
+      {
+        "command": "stata.clearConsole",
+        "key": "ctrl+l",
+        "mac": "cmd+l",
+        "when": "terminalFocus"
+      }
+    ],
+    "languages": [
+      {
+        "id": "stata",
+        "aliases": ["Stata", "stata"],
+        "extensions": [".do", ".ado", ".mata", ".sthlp"]
+      }
+    ],
+    "configuration": {
+      "title": "Stata Console",
+      "properties": {
+        "stata.stataPath": {
+          "type": "string",
+          "default": "",
+          "description": "Full path to the Stata executable. Leave empty for auto-detection."
+        },
+        "stata.stataEdition": {
+          "type": "string",
+          "default": "MP",
+          "enum": ["MP", "SE", "BE"],
+          "enumDescriptions": [
+            "Stata/MP — Multiprocessor (fastest, requires license)",
+            "Stata/SE — Standard Edition",
+            "Stata/BE — Basic Edition"
+          ],
+          "description": "Which Stata edition to use. Auto-detection will prefer this edition."
+        },
+        "stata.browseRowLimit": {
+          "type": "number",
+          "default": 10000,
+          "description": "Maximum number of observations to display in the Data Viewer."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.3.0"
+  }
+}
