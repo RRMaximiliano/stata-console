@@ -70,8 +70,9 @@ export class StataTerminal implements vscode.Pseudoterminal {
         const metaPath = path.join(this.tempDir, '_meta.txt');
         const resultsPath = path.join(this.tempDir, '_results.tsv');
         const code = [
-            // Graph export is now injected inline after each graph command
-            // in doSendCode, so we don't need it here.
+            // Fallback graph export — catches graphs from nested do-files
+            // (inline injection only works for directly-run code)
+            `capture graph export "${this.graphPath}", as(png) width(800) replace`,
 
             // 1. Dataset metadata
             `capture file close _vsc_mh`,
