@@ -2,7 +2,7 @@
   "name": "stata-console",
   "displayName": "Stata Console",
   "description": "Interactive Stata console embedded in VS Code — terminal, data viewer, variables panel, plots",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "rrmaximiliano",
   "license": "MIT",
   "repository": {

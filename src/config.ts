@@ -37,35 +37,9 @@ function buildSearchPaths(edition?: string): string[] {
         paths.push('/usr/local/bin/stata');
     }
 
-    if (platform === 'win32') {
-        // Windows — Stata 14-19
-        const versions = ['19', '18', '17', '16', '15', '14'];
-        const winExe: Record<StataEdition, string[]> = {
-            mp: ['StataMP-64.exe', 'StataMP.exe'],
-            se: ['StataSE-64.exe', 'StataSE.exe'],
-            be: ['StataBE-64.exe', 'Stata.exe'],
-        };
-        for (const ed of editions) {
-            for (const ver of versions) {
-                for (const exe of winExe[ed]) {
-                    paths.push(`C:\\Program Files\\Stata${ver}\\${exe}`);
-                    paths.push(`C:\\Program Files (x86)\\Stata${ver}\\${exe}`);
-                }
-            }
-        }
-    }
-
-    if (platform === 'linux') {
-        // Linux — /usr/local/stataNN/
-        const versions = ['19', '18', '17', '16', '15', '14'];
-        for (const ed of editions) {
-            for (const ver of versions) {
-                paths.push(`/usr/local/stata${ver}/stata-${ed}`);
-            }
-            paths.push(`/usr/local/stata/stata-${ed}`);
-        }
-        paths.push('/usr/local/stata/stata');
-    }
+    // Windows and Linux are not currently supported.
+    // Stata on Windows is a GUI application and does not provide
+    // the console-mode stdin/stdout interface this extension requires.
 
     return paths;
 }

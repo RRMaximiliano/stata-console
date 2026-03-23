@@ -59,7 +59,7 @@ The Stata icon in the Activity Bar opens four panels:
 | `stata.colors.tableSeparator` | `#B4B4B4` | Color of table separator lines (hex) |
 | `stata.colors.dim` | `#787878` | Color of dimmed/info text (hex) |
 
-Auto-detection searches standard installation paths on macOS, Windows, and Linux for Stata versions 14 through 19. Console colors take effect when the Stata console is opened or restarted.
+Auto-detection searches standard macOS installation paths for Stata versions 14 through 19. Console colors take effect when the Stata console is opened or restarted.
 
 ## How it works
 
@@ -102,6 +102,7 @@ Then open the folder in VS Code and press `F5` to launch the Extension Developme
 
 ## Requirements
 
+- **macOS only** — this extension has only been tested on macOS. Windows and Linux are not currently supported. On Windows, Stata is a GUI application and does not provide the console-mode interface that this extension relies on. Contributions for Windows/Linux support are welcome.
 - Stata 14 or later (MP, SE, or BE) installed on your system
 - VS Code 1.80.0 or later
 
