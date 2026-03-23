@@ -4,17 +4,31 @@ import * as path from 'path';
 import * as os from 'os';
 import { StataProcess } from './stataProcess';
 
-// Terminal colors — inspired by Stata's Results window
-const C = {
-    prompt: '\x1b[38;2;78;154;106m',      // muted green for ". " prompt
-    cmd:    '\x1b[38;2;86;156;214m',       // soft blue for echoed commands (like Stata)
-    err:    '\x1b[38;2;204;62;68m',        // red for errors
-    errBg:  '\x1b[38;2;204;62;68m',        // red text for error context
-    table:  '\x1b[38;2;180;180;180m',      // light gray for table separators
-    dim:    '\x1b[38;2;120;120;120m',      // dim for chrome/info
-    bold:   '\x1b[1m',                     // bold
-    reset:  '\x1b[0m',
-};
+/** Convert hex color (#RRGGBB) to ANSI 24-bit escape code */
+function hexToAnsi(hex: string): string {
+    const h = hex.replace('#', '');
+    const r = parseInt(h.substring(0, 2), 16) || 0;
+    const g = parseInt(h.substring(2, 4), 16) || 0;
+    const b = parseInt(h.substring(4, 6), 16) || 0;
+    return `\x1b[38;2;${r};${g};${b}m`;
+}
+
+/** Read console colors from user settings, with defaults */
+function loadColors() {
+    const cfg = vscode.workspace.getConfiguration('stata.colors');
+    return {
+        prompt: hexToAnsi(cfg.get<string>('prompt', '#4E9A6A')),
+        cmd:    hexToAnsi(cfg.get<string>('command', '#569CD6')),
+        err:    hexToAnsi(cfg.get<string>('error', '#CC3E44')),
+        errBg:  hexToAnsi(cfg.get<string>('error', '#CC3E44')),
+        table:  hexToAnsi(cfg.get<string>('tableSeparator', '#B4B4B4')),
+        dim:    hexToAnsi(cfg.get<string>('dim', '#787878')),
+        bold:   '\x1b[1m',
+        reset:  '\x1b[0m',
+    };
+}
+
+let C = loadColors();
 
 const BROWSE_RE = /^(br|bro|brow|brows|browse|ed|edi|edit)\b(.*)$/i;
 
@@ -145,6 +159,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
 
     open(): void {
         this.isOpen = true;
+        C = loadColors(); // pick up any settings changes
 
         this.out(
             `\r\n` +

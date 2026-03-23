@@ -146,6 +146,31 @@
           "type": "number",
           "default": 10000,
           "description": "Maximum number of observations to display in the Data Viewer."
+        },
+        "stata.colors.prompt": {
+          "type": "string",
+          "default": "#4E9A6A",
+          "description": "Color of the \". \" prompt in the Stata console (hex)."
+        },
+        "stata.colors.command": {
+          "type": "string",
+          "default": "#569CD6",
+          "description": "Color of echoed commands in the Stata console (hex)."
+        },
+        "stata.colors.error": {
+          "type": "string",
+          "default": "#CC3E44",
+          "description": "Color of error messages in the Stata console (hex)."
+        },
+        "stata.colors.tableSeparator": {
+          "type": "string",
+          "default": "#B4B4B4",
+          "description": "Color of table separator lines (---+---) in the Stata console (hex)."
+        },
+        "stata.colors.dim": {
+          "type": "string",
+          "default": "#787878",
+          "description": "Color of dimmed/info text in the Stata console (hex)."
         }
       }
     }
