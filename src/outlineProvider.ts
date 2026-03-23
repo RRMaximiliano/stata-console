@@ -11,74 +11,91 @@ export class StataOutlineProvider implements vscode.DocumentSymbolProvider {
             const text = line.text;
             const trimmed = text.trim();
 
-            // program define name  or  program name  (but not "program drop" or "program dir" etc.)
-            const progMatch = trimmed.match(
-                /^program\s+(?:define\s+)?(\w+)/i
-            );
+            // Program definitions: "program define name" or "program name"
+            const progMatch = trimmed.match(/^program\s+(?:define\s+)?(\w+)/i);
             if (progMatch) {
                 const name = progMatch[1];
-                // Skip Stata sub-commands that are not program definitions
                 if (/^(drop|dir|list|define)$/i.test(name)) {
-                    // "program define" already captured the real name;
-                    // "program drop/dir/list" are not definitions
                     if (!/^program\s+define\s+/i.test(trimmed)) {
                         continue;
                     }
                 }
-                const range = line.range;
-                const symbol = new vscode.DocumentSymbol(
-                    name,
-                    'program',
-                    vscode.SymbolKind.Function,
-                    range,
-                    range,
-                );
-                symbols.push(symbol);
+                symbols.push(new vscode.DocumentSymbol(
+                    name, 'program', vscode.SymbolKind.Function,
+                    line.range, line.range,
+                ));
                 continue;
             }
 
-            // Section headers: lines starting with * --- or * === or * ***
-            const sectionMatch = trimmed.match(
-                /^\*\s*([-=*]{3,})\s*(.*)/
-            );
-            if (sectionMatch) {
-                const afterMarker = sectionMatch[2].trim();
-                // Use text after marker; if empty, use the whole line
-                const sectionName = afterMarker
-                    ? afterMarker.replace(/[-=*]+\s*$/, '').trim() || trimmed
-                    : trimmed;
-                const range = line.range;
-                const symbol = new vscode.DocumentSymbol(
-                    sectionName,
-                    'section',
-                    vscode.SymbolKind.Module,
-                    range,
-                    range,
-                );
-                symbols.push(symbol);
+            // Section headers: comment lines with actual title text.
+            // Pattern: look for a comment line that contains words (not just dashes/stars/equals).
+            // The title is on the NEXT or PREVIOUS line if this is a separator.
+            // Common Stata patterns:
+            //   * --- Title ---
+            //   * === Title ===
+            //   * Title
+            //   * 1. Title
+            // Skip pure separator lines: * -------, * =======, * *******
+            if (/^\*/.test(trimmed)) {
+                const commentBody = trimmed.replace(/^\*\s*/, '').trim();
+
+                // Skip pure separator lines (only dashes, equals, stars, spaces, pipes)
+                if (!commentBody || /^[-=*|_~#+\s]+$/.test(commentBody)) {
+                    continue;
+                }
+
+                // Skip very short comments (less than 3 chars of actual text)
+                const textOnly = commentBody.replace(/[-=*|_~#+\s]/g, '');
+                if (textOnly.length < 3) {
+                    continue;
+                }
+
+                // Detect numbered sections: "1. Title" or "Section Title"
+                // Only show if it looks like a section header (has a number prefix,
+                // or is between separator lines, or is ALL CAPS, or starts with a keyword)
+                const isNumbered = /^\d+[\.\)]\s+/.test(commentBody);
+                const isAllCaps = textOnly === textOnly.toUpperCase() && textOnly.length > 3;
+                const hasSeparatorContext = this.hasSeparatorNeighbor(document, i);
+
+                if (isNumbered || isAllCaps || hasSeparatorContext) {
+                    // Clean up the title: remove trailing separator chars
+                    const title = commentBody
+                        .replace(/^[-=*\s]+/, '')
+                        .replace(/[-=*\s]+$/, '')
+                        .trim();
+
+                    if (title.length >= 3) {
+                        symbols.push(new vscode.DocumentSymbol(
+                            title, 'section', vscode.SymbolKind.Module,
+                            line.range, line.range,
+                        ));
+                    }
+                }
                 continue;
             }
 
-            // foreach ... { and forvalues ... {
-            const loopMatch = trimmed.match(
-                /^(foreach|forvalues)\s+(.+?)\s*\{/i
-            );
+            // Loops: foreach ... { and forvalues ... {
+            const loopMatch = trimmed.match(/^(foreach|forvalues)\s+(.+?)\s*\{/i);
             if (loopMatch) {
-                const keyword = loopMatch[1];
-                const rest = loopMatch[2].trim();
-                const range = line.range;
-                const symbol = new vscode.DocumentSymbol(
-                    `${keyword} ${rest}`,
-                    'loop',
+                symbols.push(new vscode.DocumentSymbol(
+                    `${loopMatch[1]} ${loopMatch[2].trim()}`, 'loop',
                     vscode.SymbolKind.Variable,
-                    range,
-                    range,
-                );
-                symbols.push(symbol);
+                    line.range, line.range,
+                ));
                 continue;
             }
         }
 
         return symbols;
+    }
+
+    /** Check if the line above or below is a separator (--- or === or ***) */
+    private hasSeparatorNeighbor(doc: vscode.TextDocument, lineNum: number): boolean {
+        const check = (n: number) => {
+            if (n < 0 || n >= doc.lineCount) { return false; }
+            const t = doc.lineAt(n).text.trim().replace(/^\*\s*/, '');
+            return /^[-=*|_~#+\s]{5,}$/.test(t);
+        };
+        return check(lineNum - 1) || check(lineNum + 1);
     }
 }
