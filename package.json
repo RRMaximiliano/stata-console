@@ -62,7 +62,8 @@
       { "command": "stata.plotSave", "title": "Save Plot As...", "category": "Stata", "enablement": "stata.consoleActive" },
       { "command": "stata.showPlot", "title": "Show Plot", "category": "Stata" },
       { "command": "stata.plotClear", "title": "Clear All Plots", "category": "Stata", "icon": "$(trash)", "enablement": "stata.consoleActive" },
-      { "command": "stata.refreshVariables", "title": "Refresh Variables", "category": "Stata", "icon": "$(refresh)", "enablement": "stata.consoleActive" }
+      { "command": "stata.refreshVariables", "title": "Refresh Variables", "category": "Stata", "icon": "$(refresh)", "enablement": "stata.consoleActive" },
+      { "command": "stata.previewSthlp", "title": "Preview Stata Help File", "category": "Stata", "icon": "$(open-preview)" }
     ],
     "menus": {
       "view/title": [
@@ -79,6 +80,13 @@
         {
           "command": "stata.browse",
           "when": "view == stataDataset",
+          "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "stata.previewSthlp",
+          "when": "resourceExtname == .sthlp",
           "group": "navigation"
         }
       ],
@@ -113,6 +121,12 @@
         "key": "ctrl+l",
         "mac": "cmd+l",
         "when": "terminalFocus"
+      },
+      {
+        "command": "stata.previewSthlp",
+        "key": "ctrl+shift+v",
+        "mac": "cmd+shift+v",
+        "when": "editorTextFocus && resourceExtname == .sthlp"
       }
     ],
     "languages": [
