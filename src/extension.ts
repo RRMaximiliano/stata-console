@@ -10,6 +10,8 @@ import { PlotsListPanel } from './plotsListPanel';
 import { StataCompletionProvider } from './completionProvider';
 import { StataHoverProvider } from './hoverProvider';
 import { StataLinkProvider } from './linkProvider';
+import { StataOutlineProvider } from './outlineProvider';
+import { StataDefinitionProvider } from './definitionProvider';
 import { getStataPath } from './config';
 
 let stataTerminal: StataTerminal | undefined;
@@ -17,6 +19,8 @@ let terminal: vscode.Terminal | undefined;
 let graphPanel: GraphPanel | undefined;
 let dataPanel: DataPanel | undefined;
 let statusBarItem: vscode.StatusBarItem;
+let busyStatusItem: vscode.StatusBarItem;
+let diagnosticCollection: vscode.DiagnosticCollection;
 
 // Sidebar panels (created once in activate, persist across terminal sessions)
 let datasetPanel: DatasetPanel;
@@ -86,6 +90,60 @@ function ensureConsole(): boolean {
         );
     });
 
+    // Running indicator — spinner in status bar while Stata is busy
+    let lastStatusText = '';
+    stataTerminal.onDidChangeBusy((busy) => {
+        if (busy) {
+            lastStatusText = statusBarItem.text;
+            busyStatusItem.text = '$(sync~spin) Running...';
+            busyStatusItem.show();
+        } else {
+            busyStatusItem.hide();
+        }
+    });
+
+    // Diagnostics from Stata errors
+    stataTerminal.onDidDetectError((errorMsg) => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) { return; }
+        const doc = editor.document;
+        // Extract the first meaningful error line (before r(NNN);)
+        const errorLines = errorMsg.split('\n');
+        const displayMsg = errorLines.filter(l => !/^r\(\d+\);/.test(l.trim())).join(' ').trim() || errorMsg;
+
+        // Try to find the line in the active editor that caused the error
+        // Look for the echoed command (line starting with ". ")
+        let targetLine = -1;
+        for (const eLine of errorLines) {
+            const cmdMatch = eLine.match(/^\.\s+(.+)/);
+            if (cmdMatch) {
+                const cmd = cmdMatch[1].trim();
+                // Search the document for this command
+                for (let i = 0; i < doc.lineCount; i++) {
+                    if (doc.lineAt(i).text.trim() === cmd) {
+                        targetLine = i;
+                        break;
+                    }
+                }
+                if (targetLine >= 0) { break; }
+            }
+        }
+
+        // Fallback: use the current cursor line or line 0
+        if (targetLine < 0) {
+            targetLine = editor.selection.active.line;
+        }
+
+        const range = doc.lineAt(targetLine).range;
+        const diag = new vscode.Diagnostic(
+            range,
+            displayMsg,
+            vscode.DiagnosticSeverity.Error,
+        );
+        diag.source = 'Stata';
+        diagnosticCollection.set(doc.uri, [diag]);
+    });
+
     terminal = vscode.window.createTerminal({
         name: 'Stata Console',
         pty: stataTerminal,
@@ -128,6 +186,16 @@ export function activate(context: vscode.ExtensionContext) {
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
 
+    // Busy/running indicator in status bar
+    busyStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
+    busyStatusItem.text = '$(sync~spin) Running...';
+    busyStatusItem.tooltip = 'Stata is executing code';
+    context.subscriptions.push(busyStatusItem);
+
+    // Diagnostics collection for Stata errors
+    diagnosticCollection = vscode.languages.createDiagnosticCollection('stata');
+    context.subscriptions.push(diagnosticCollection);
+
     // Sidebar panels
     datasetPanel = new DatasetPanel();
     variablesPanel = new VariablesPanel();
@@ -163,6 +231,7 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('stata.run', () => {
             const editor = vscode.window.activeTextEditor;
             if (!editor) { return; }
+            diagnosticCollection.clear();
             const fileDir = path.dirname(editor.document.fileName);
             if (!editor.selection.isEmpty) {
                 const code = editor.document.getText(editor.selection);
@@ -184,6 +253,7 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('stata.runSelection', () => {
             const editor = vscode.window.activeTextEditor;
             if (!editor) { return; }
+            diagnosticCollection.clear();
             let code: string;
             if (editor.selection.isEmpty) {
                 const line = editor.document.lineAt(editor.selection.active.line);
@@ -203,6 +273,7 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('stata.runFile', () => {
             const editor = vscode.window.activeTextEditor;
             if (!editor) { vscode.window.showWarningMessage('No file is open.'); return; }
+            diagnosticCollection.clear();
             const filePath = editor.document.fileName;
             if (!filePath) { return; }
             editor.document.save().then(() => {
@@ -284,6 +355,14 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.languages.registerDocumentLinkProvider(
             { language: 'stata' },
             new StataLinkProvider()
+        ),
+        vscode.languages.registerDocumentSymbolProvider(
+            { language: 'stata' },
+            new StataOutlineProvider()
+        ),
+        vscode.languages.registerDefinitionProvider(
+            { language: 'stata' },
+            new StataDefinitionProvider()
         ),
     );
 }

@@ -25,6 +25,8 @@ export class StataTerminal implements vscode.Pseudoterminal {
     private browseEmitter = new vscode.EventEmitter<{ csvPath: string; totalObs?: number }>();
     private varsUpdatedEmitter = new vscode.EventEmitter<{ obs: number; vars: number; filename: string; label: string }>();
     private resultsUpdatedEmitter = new vscode.EventEmitter<void>();
+    private busyEmitter = new vscode.EventEmitter<boolean>();
+    private errorEmitter = new vscode.EventEmitter<string>();
 
     onDidWrite = this.writeEmitter.event;
     onDidClose = this.closeEmitter.event;
@@ -32,6 +34,8 @@ export class StataTerminal implements vscode.Pseudoterminal {
     onDidRequestBrowse = this.browseEmitter.event;
     onDidUpdateVariables = this.varsUpdatedEmitter.event;
     onDidUpdateResults = this.resultsUpdatedEmitter.event;
+    onDidChangeBusy = this.busyEmitter.event;
+    onDidDetectError = this.errorEmitter.event;
 
     private stataProcess: StataProcess;
     private lineBuffer = '';
@@ -222,6 +226,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
 
                 const cleaned = this.stripInlineComments(command);
                 this.recentInteractiveCmds.push(cleaned.trim());
+                this.busyEmitter.fire(true);
                 this.stataProcess.write(cleaned);
             } else {
                 this.showPrompt();
@@ -291,6 +296,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
     }
 
     private doSendCode(code: string, workingDir?: string): void {
+        this.busyEmitter.fire(true);
         this.recentInteractiveCmds = [];
         this.lastGraphMtime = this.getFileMtime(this.graphPath);
         this.lastVarsMtime = this.getFileMtime(this.varsPath);
@@ -400,6 +406,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
 
         this.promptTimer = setTimeout(() => {
             this.promptTimer = null;
+            this.busyEmitter.fire(false);
             this.showPrompt();
         }, 200);
     }
@@ -448,6 +455,15 @@ export class StataTerminal implements vscode.Pseudoterminal {
             // Error codes: r(123);
             if (/^r\(\d+\);/.test(stripped)) {
                 result.push(`${C.err}${line}${C.reset}`);
+                // Emit error: collect preceding error lines as the message
+                const errorLines: string[] = [];
+                for (let j = result.length - 2; j >= 0; j--) {
+                    const raw = result[j].replace(/\x1b\[[^m]*m/g, '').trim();
+                    if (!raw) { break; }
+                    errorLines.unshift(raw);
+                }
+                errorLines.push(stripped);
+                this.errorEmitter.fire(errorLines.join('\n'));
                 inError = false;
                 continue;
             }
@@ -672,5 +688,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
         this.browseEmitter.dispose();
         this.varsUpdatedEmitter.dispose();
         this.resultsUpdatedEmitter.dispose();
+        this.busyEmitter.dispose();
+        this.errorEmitter.dispose();
     }
 }
