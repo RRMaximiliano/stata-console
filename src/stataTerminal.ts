@@ -53,8 +53,8 @@ export class StataTerminal implements vscode.Pseudoterminal {
     private graphPath: string;
     private varsPath: string;
     private dirWatcher: fs.FSWatcher | null = null;
-    private lastGraphSize = 0;
-    private graphDebounce: ReturnType<typeof setTimeout> | null = null;
+    private graphDebounces = new Map<string, ReturnType<typeof setTimeout>>();
+    private hadInlineGraphExport = false;
     private varsDebounce: ReturnType<typeof setTimeout> | null = null;
     private lastGraphMtime = 0;
     private lastVarsMtime = 0;
@@ -299,20 +299,19 @@ export class StataTerminal implements vscode.Pseudoterminal {
     private doSendCode(code: string, workingDir?: string): void {
         this.busyEmitter.fire(true);
         this.recentInteractiveCmds = [];
-        this.lastGraphSize = 0; // reset so new graphs are detected
         this.lastGraphMtime = this.getFileMtime(this.graphPath);
         this.lastVarsMtime = this.getFileMtime(this.varsPath);
 
         // Delete old browse CSV so watcher can detect a new one
         try { fs.unlinkSync(path.join(this.tempDir, '_browse.csv')); } catch { /* ignore */ }
 
-        // Process lines: replace browse/edit (not available in console mode),
-        // inject graph export after graph commands
+        // Process lines: replace browse/edit, inject graph export with unique filenames
         const csvPath = path.join(this.tempDir, '_browse.csv');
         const countPath = path.join(this.tempDir, '_count.txt');
         const sourceLines = code.split(/\r?\n/);
         const outputLines: string[] = [];
         let inGraphCmd = false;
+        let graphNum = 0;
 
         for (const line of sourceLines) {
             const trimmed = line.trim();
@@ -335,18 +334,24 @@ export class StataTerminal implements vscode.Pseudoterminal {
 
             outputLines.push(line);
 
-            // Detect graph-producing commands to inject export after each
+            // Inject graph export with UNIQUE filename after each graph command.
+            // Unique names prevent debounce from collapsing multiple graphs.
             const isContinuation = trimmed.endsWith('///');
             if (!inGraphCmd && this.isGraphCommand(trimmed)) {
                 inGraphCmd = true;
             }
             if (inGraphCmd && !isContinuation) {
                 inGraphCmd = false;
+                graphNum++;
+                const plotFile = path.join(this.tempDir, `_cap_${this.tempCounter}_${graphNum}.png`);
                 outputLines.push(
-                    `capture quietly graph export "${this.graphPath}", as(png) width(800) replace`
+                    `capture quietly graph export "${plotFile}", as(png) width(800) replace`
                 );
             }
         }
+
+        // Track whether we injected inline graph exports — if so, skip _graph.png fallback
+        this.hadInlineGraphExport = graphNum > 0;
 
         const tempFile = path.join(this.tempDir, `_run_${++this.tempCounter}.do`);
 
@@ -515,23 +520,24 @@ export class StataTerminal implements vscode.Pseudoterminal {
             this.dirWatcher = fs.watch(this.tempDir, (_event, filename) => {
                 if (!filename) { return; }
 
-                if (filename === '_graph.png') {
-                    // Debounce 500ms — Stata writes PNGs in chunks, and
-                    // inline + _post.do may both export. Wait for the file
-                    // to stabilize before capturing.
-                    if (this.graphDebounce) { clearTimeout(this.graphDebounce); }
-                    this.graphDebounce = setTimeout(() => {
-                        this.graphDebounce = null;
+                // Detect graph PNG files: _cap_*.png (inline) or _graph.png (fallback only)
+                const isInlineCapture = filename?.startsWith('_cap_');
+                const isFallback = filename === '_graph.png' && !this.hadInlineGraphExport;
+                if (isInlineCapture || isFallback) {
+                    // Per-file debounce — each graph gets its own timer
+                    const key = filename;
+                    const existing = this.graphDebounces.get(key);
+                    if (existing) { clearTimeout(existing); }
+                    this.graphDebounces.set(key, setTimeout(() => {
+                        this.graphDebounces.delete(key);
+                        const filePath = path.join(this.tempDir, key);
                         try {
-                            const stat = fs.statSync(this.graphPath);
-                            // Only fire if file is valid AND different from last capture
-                            // (deduplicates inline + _post.do double export)
-                            if (stat.size > 100 && stat.size !== this.lastGraphSize) {
-                                this.lastGraphSize = stat.size;
-                                this.graphEmitter.fire(this.graphPath);
+                            const stat = fs.statSync(filePath);
+                            if (stat.size > 100) {
+                                this.graphEmitter.fire(filePath);
                             }
                         } catch { /* ignore */ }
-                    }, 500);
+                    }, 300));
                 }
 
                 if (filename === '_vars.tsv') {
@@ -682,7 +688,8 @@ export class StataTerminal implements vscode.Pseudoterminal {
     dispose(): void {
         this.clearPromptTimer();
         this.dirWatcher?.close();
-        if (this.graphDebounce) { clearTimeout(this.graphDebounce); }
+        this.graphDebounces.forEach(t => clearTimeout(t));
+        this.graphDebounces.clear();
         if (this.varsDebounce) { clearTimeout(this.varsDebounce); }
         this.stataProcess.dispose();
         this.cleanupTempDir();
