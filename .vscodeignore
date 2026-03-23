@@ -1,0 +1,10 @@
+src/**
+test-scripts/**
+.claude/**
+.vscode/**
+.gitignore
+tsconfig.json
+**/*.map
+node_modules/**
+.DS_Store
+**/*.svg

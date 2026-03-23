@@ -80,6 +80,26 @@ Right now, this extension is slower than regular Stata. That's it, that's the me
 - **Stored results.** Only `e()` scalars and macros are shown. `r()` return values are not currently captured.
 - **Go to definition.** Works within the current file only.
 
+## Installation
+
+**From the Marketplace:**
+Search for "Stata Console" in the VS Code Extensions panel (`Cmd+Shift+X`), or visit [the marketplace page](https://marketplace.visualstudio.com/items?itemName=rrmaximiliano.stata-console).
+
+**From a `.vsix` file:**
+Download the latest `.vsix` from [GitHub Releases](https://github.com/RRMaximiliano/stata-console/releases), then run:
+```
+code --install-extension stata-console-0.3.0.vsix
+```
+
+**From source:**
+```
+git clone https://github.com/RRMaximiliano/stata-console.git
+cd stata-console
+npm install
+npm run compile
+```
+Then open the folder in VS Code and press `F5` to launch the Extension Development Host.
+
 ## Requirements
 
 - Stata 14 or later (MP, SE, or BE) installed on your system
