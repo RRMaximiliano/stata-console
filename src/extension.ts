@@ -254,18 +254,30 @@ export function activate(context: vscode.ExtensionContext) {
             const editor = vscode.window.activeTextEditor;
             if (!editor) { return; }
             diagnosticCollection.clear();
-            let code: string;
+
             if (editor.selection.isEmpty) {
-                const line = editor.document.lineAt(editor.selection.active.line);
-                code = line.text;
-                const next = Math.min(editor.selection.active.line + 1, editor.document.lineCount - 1);
-                editor.selection = new vscode.Selection(new vscode.Position(next, 0), new vscode.Position(next, 0));
+                // No selection — run current line and advance cursor
+                const lineNum = editor.selection.active.line;
+                const code = editor.document.lineAt(lineNum).text;
+
+                // Always advance to next line (even for empty/comment lines)
+                const next = Math.min(lineNum + 1, editor.document.lineCount - 1);
+                const pos = new vscode.Position(next, 0);
+                editor.selection = new vscode.Selection(pos, pos);
+                editor.revealRange(new vscode.Range(pos, pos));
+
+                // Only send non-empty, non-comment lines to Stata
+                const trimmed = code.trim();
+                if (trimmed === '' || trimmed.startsWith('*') || trimmed.startsWith('//')) { return; }
+                if (!ensureConsole()) { return; }
+                stataTerminal!.sendCode(code, path.dirname(editor.document.fileName));
             } else {
-                code = editor.document.getText(editor.selection);
+                // Has selection — run it
+                const code = editor.document.getText(editor.selection);
+                if (code.trim() === '') { return; }
+                if (!ensureConsole()) { return; }
+                stataTerminal!.sendCode(code, path.dirname(editor.document.fileName));
             }
-            if (code.trim() === '') { return; }
-            if (!ensureConsole()) { return; }
-            stataTerminal!.sendCode(code, path.dirname(editor.document.fileName));
         })
     );
 
