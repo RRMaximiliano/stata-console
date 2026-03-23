@@ -13,6 +13,7 @@ import { StataLinkProvider } from './linkProvider';
 import { StataOutlineProvider } from './outlineProvider';
 import { StataDefinitionProvider } from './definitionProvider';
 import { getStataPath } from './config';
+import { registerSthlpViewer } from './sthlpViewer';
 
 let stataTerminal: StataTerminal | undefined;
 let terminal: vscode.Terminal | undefined;
@@ -377,6 +378,9 @@ export function activate(context: vscode.ExtensionContext) {
             new StataDefinitionProvider()
         ),
     );
+
+    // SMCL help file viewer
+    registerSthlpViewer(context);
 }
 
 export function deactivate() {
