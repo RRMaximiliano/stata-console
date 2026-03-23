@@ -104,9 +104,9 @@
       },
       {
         "command": "stata.runSelection",
-        "key": "ctrl+enter",
-        "mac": "cmd+enter",
-        "when": "editorTextFocus && resourceExtname =~ /\\.(do|ado|mata)$/"
+        "key": "shift+enter",
+        "mac": "shift+enter",
+        "when": "editorTextFocus && editorLangId == stata"
       },
       {
         "command": "stata.clearConsole",

@@ -29,11 +29,13 @@ Right now, the extension does the following:
 | Shortcut | Action |
 |----------|--------|
 | `Cmd+Shift+D` | Run do-file or selection |
-| `Cmd+Enter` | Run current line / selection |
+| `Shift+Enter` | Run current line and advance cursor |
 | `Cmd+L` | Clear console |
 | `Ctrl+C` | Interrupt execution |
 | `Cmd+/` | Toggle line comments |
 | `Cmd+Shift+O` | Open outline |
+
+All shortcuts can be customized via `Cmd+K Cmd+S` (Keyboard Shortcuts).
 
 ## Sidebar panels
 
