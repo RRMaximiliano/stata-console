@@ -162,6 +162,21 @@ img { max-width: 100%; max-height: 100%; object-fit: contain; }
         this.panel.reveal(vscode.ViewColumn.Beside, true);
     }
 
+    clearAll(): void {
+        this.plots = [];
+        this.currentIndex = -1;
+        this.plotCounter = 0;
+        if (this.panel) {
+            this.panel.title = 'Plots';
+            this.panel.webview.html = `<!DOCTYPE html>
+<html><head><style>
+body { display:flex; justify-content:center; align-items:center; height:100vh;
+       font-family:var(--vscode-font-family,system-ui); color:var(--vscode-descriptionForeground,#888);
+       background:var(--vscode-editor-background,#1e1e1e); }
+</style></head><body><div style="text-align:center">No plots</div></body></html>`;
+        }
+    }
+
     dispose(): void {
         this.panel?.dispose();
     }

@@ -223,6 +223,10 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('stata.plotPrev', () => { graphPanel?.prev(); }),
         vscode.commands.registerCommand('stata.plotNext', () => { graphPanel?.next(); }),
         vscode.commands.registerCommand('stata.plotSave', () => { graphPanel?.save(); }),
+        vscode.commands.registerCommand('stata.plotClear', () => {
+            graphPanel?.clearAll();
+            plotsListPanel.clear();
+        }),
         vscode.commands.registerCommand('stata.showPlot', (index: number) => {
             // Called from plots list panel — navigate to specific plot
             if (graphPanel && index >= 0) {

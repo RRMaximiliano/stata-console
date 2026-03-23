@@ -61,6 +61,7 @@
       { "command": "stata.plotNext", "title": "Next Plot", "category": "Stata", "enablement": "stata.consoleActive" },
       { "command": "stata.plotSave", "title": "Save Plot As...", "category": "Stata", "enablement": "stata.consoleActive" },
       { "command": "stata.showPlot", "title": "Show Plot", "category": "Stata" },
+      { "command": "stata.plotClear", "title": "Clear All Plots", "category": "Stata", "icon": "$(trash)", "enablement": "stata.consoleActive" },
       { "command": "stata.refreshVariables", "title": "Refresh Variables", "category": "Stata", "icon": "$(refresh)", "enablement": "stata.consoleActive" }
     ],
     "menus": {
@@ -68,6 +69,11 @@
         {
           "command": "stata.refreshVariables",
           "when": "view == stataVariables",
+          "group": "navigation"
+        },
+        {
+          "command": "stata.plotClear",
+          "when": "view == stataPlotsList",
           "group": "navigation"
         },
         {
