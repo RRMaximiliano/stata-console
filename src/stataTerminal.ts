@@ -53,6 +53,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
     private graphPath: string;
     private varsPath: string;
     private dirWatcher: fs.FSWatcher | null = null;
+    private lastGraphSize = 0;
     private graphDebounce: ReturnType<typeof setTimeout> | null = null;
     private varsDebounce: ReturnType<typeof setTimeout> | null = null;
     private lastGraphMtime = 0;
@@ -298,6 +299,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
     private doSendCode(code: string, workingDir?: string): void {
         this.busyEmitter.fire(true);
         this.recentInteractiveCmds = [];
+        this.lastGraphSize = 0; // reset so new graphs are detected
         this.lastGraphMtime = this.getFileMtime(this.graphPath);
         this.lastVarsMtime = this.getFileMtime(this.varsPath);
 
@@ -514,20 +516,22 @@ export class StataTerminal implements vscode.Pseudoterminal {
                 if (!filename) { return; }
 
                 if (filename === '_graph.png') {
+                    // Debounce 500ms — Stata writes PNGs in chunks, and
+                    // inline + _post.do may both export. Wait for the file
+                    // to stabilize before capturing.
                     if (this.graphDebounce) { clearTimeout(this.graphDebounce); }
                     this.graphDebounce = setTimeout(() => {
                         this.graphDebounce = null;
-                        const mtime = this.getFileMtime(this.graphPath);
-                        if (mtime > this.lastGraphMtime) {
-                            this.lastGraphMtime = mtime;
-                            try {
-                                const stat = fs.statSync(this.graphPath);
-                                if (stat.size > 100) {
-                                    this.graphEmitter.fire(this.graphPath);
-                                }
-                            } catch { /* ignore */ }
-                        }
-                    }, 50);
+                        try {
+                            const stat = fs.statSync(this.graphPath);
+                            // Only fire if file is valid AND different from last capture
+                            // (deduplicates inline + _post.do double export)
+                            if (stat.size > 100 && stat.size !== this.lastGraphSize) {
+                                this.lastGraphSize = stat.size;
+                                this.graphEmitter.fire(this.graphPath);
+                            }
+                        } catch { /* ignore */ }
+                    }, 500);
                 }
 
                 if (filename === '_vars.tsv') {
