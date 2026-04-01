@@ -309,7 +309,7 @@
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
-    "test": "npm run compile && node --test test/**/*.test.js",
+    "test": "npm run compile && node --test",
     "verify": "npm run lint && npm run test && npm run compile",
     "package:vsix": "vsce package"
   },
