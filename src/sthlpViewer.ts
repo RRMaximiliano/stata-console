@@ -389,13 +389,14 @@ function renderDirective(d: SmclDirective, state: ParseState): string {
                 case 'BT': return '\u2534';
                 case 'CT': // Removed unused variable
                 case 'CRS': return '\u253C';
-                default:
+                default: {
                     // {c N} — character code
                     const code = parseInt(ch);
                     if (!isNaN(code)) {
                         return String.fromCharCode(code);
                     }
                     return '';
+                }
             }
         }
 

@@ -53,7 +53,7 @@ export class StataOutlineProvider implements vscode.DocumentSymbolProvider {
                 // Detect numbered sections: "1. Title" or "Section Title"
                 // Only show if it looks like a section header (has a number prefix,
                 // or is between separator lines, or is ALL CAPS, or starts with a keyword)
-                const isNumbered = /^\d+[\.\)]\s+/.test(commentBody);
+                const isNumbered = /^\d+[.)]\s+/.test(commentBody);
                 const isAllCaps = textOnly === textOnly.toUpperCase() && textOnly.length > 3;
                 const hasSeparatorContext = this.hasSeparatorNeighbor(document, i);
 

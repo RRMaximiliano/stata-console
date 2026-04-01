@@ -1,13 +1,5 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import * as path from 'path';
-
-interface ResultItem {
-    type: 'section' | 'scalar' | 'macro';
-    name: string;
-    value: string;
-    section?: string;
-}
 
 type TreeNode = ResultSection | ResultEntry;
 

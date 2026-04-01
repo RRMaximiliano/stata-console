@@ -1,85 +1,83 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
+import { execFileSync } from 'child_process';
+import {
+    type ResolverEnvironment,
+    type StataPathDiagnostics,
+    getStataPathDiagnostics as getResolverDiagnostics,
+    getStataPathHelp as getResolverHelp,
+    resolveStataPath,
+    resolveConfiguredPath,
+} from './stataPathResolver';
 
-type StataEdition = 'mp' | 'se' | 'be';
-
-// Build search paths dynamically based on configured edition preference
-function buildSearchPaths(edition?: string): string[] {
-    // Edition priority: user preference first, then MP > SE > BE
-    const editions: StataEdition[] =
-        edition === 'SE' ? ['se', 'mp', 'be'] :
-        edition === 'BE' ? ['be', 'se', 'mp'] :
-        ['mp', 'se', 'be']; // default: MP first
-
-    const paths: string[] = [];
-    const platform = os.platform();
-
-    if (platform === 'darwin') {
-        // macOS paths — StataNow and classic installations
-        const macDirs = ['/Applications/StataNow', '/Applications/Stata'];
-        const appNames: Record<StataEdition, string[]> = {
-            mp: ['StataMP.app/Contents/MacOS/stata-mp', 'StataMPM1.app/Contents/MacOS/stata-mp'],
-            se: ['StataSE.app/Contents/MacOS/stata-se'],
-            be: ['StataBE.app/Contents/MacOS/stata-be', 'Stata.app/Contents/MacOS/stata'],
-        };
-        for (const ed of editions) {
-            for (const dir of macDirs) {
-                for (const app of appNames[ed]) {
-                    paths.push(`${dir}/${app}`);
-                }
+function createResolverEnvironment(): ResolverEnvironment {
+    return {
+        platform: os.platform(),
+        homeDir: os.homedir(),
+        isFile(filePath: string): boolean {
+            try {
+                return fs.statSync(filePath).isFile();
+            } catch {
+                return false;
             }
-        }
-        // Homebrew / symlinks
-        for (const ed of editions) {
-            paths.push(`/usr/local/bin/stata-${ed}`);
-        }
-        paths.push('/usr/local/bin/stata');
-    }
+        },
+        isDirectory(dirPath: string): boolean {
+            try {
+                return fs.statSync(dirPath).isDirectory();
+            } catch {
+                return false;
+            }
+        },
+        listDir(dirPath: string): string[] {
+            try {
+                return fs.readdirSync(dirPath);
+            } catch {
+                return [];
+            }
+        },
+        execFile(command: string, args: string[]): string | undefined {
+            try {
+                return execFileSync(command, args, {
+                    encoding: 'utf-8',
+                    stdio: ['ignore', 'pipe', 'ignore'],
+                });
+            } catch {
+                return undefined;
+            }
+        },
+    };
+}
 
-    // Windows and Linux are not currently supported.
-    // Stata on Windows is a GUI application and does not provide
-    // the console-mode stdin/stdout interface this extension requires.
+export type { StataPathDiagnostics };
 
-    return paths;
+export function getStataPathHelp(): string {
+    return getResolverHelp(os.platform());
 }
 
 export function getStataPath(): string | undefined {
     const config = vscode.workspace.getConfiguration('stata');
+    const edition = config.get<string>('stataEdition', 'MP');
+    const userPath = config.get<string>('stataPath', '');
+    const env = createResolverEnvironment();
 
-    // 1. Explicit path override
-    const userPath = config.get<string>('stataPath');
-    if (userPath && userPath.trim() !== '') {
-        if (fs.existsSync(userPath)) {
-            return userPath;
+    if (userPath.trim() !== '') {
+        const resolvedUserPath = resolveConfiguredPath(userPath, edition, env);
+        if (resolvedUserPath) {
+            return resolvedUserPath;
         }
-        vscode.window.showErrorMessage(`Configured Stata path not found: ${userPath}`);
+        vscode.window.showErrorMessage(`Configured Stata path is not a valid executable: ${userPath}`);
         return undefined;
     }
 
-    // 2. Auto-detect using edition preference
-    const edition = config.get<string>('stataEdition', 'MP');
-    const searchPaths = buildSearchPaths(edition);
+    return resolveStataPath('', edition, env);
+}
 
-    for (const candidate of searchPaths) {
-        if (fs.existsSync(candidate)) {
-            return candidate;
-        }
-    }
-
-    // 3. Try `which` on Unix-like systems
-    if (os.platform() !== 'win32') {
-        try {
-            const { execSync } = require('child_process');
-            const result = execSync(
-                'which stata-mp 2>/dev/null || which stata-se 2>/dev/null || which stata 2>/dev/null',
-                { encoding: 'utf-8' }
-            ).trim();
-            if (result && fs.existsSync(result)) {
-                return result;
-            }
-        } catch { /* ignore */ }
-    }
-
-    return undefined;
+export function getStataPathDiagnostics(): StataPathDiagnostics {
+    const config = vscode.workspace.getConfiguration('stata');
+    return getResolverDiagnostics(
+        config.get<string>('stataPath', ''),
+        config.get<string>('stataEdition', 'MP'),
+        createResolverEnvironment(),
+    );
 }

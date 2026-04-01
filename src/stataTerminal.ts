@@ -29,6 +29,8 @@ function loadColors() {
 }
 
 let C = loadColors();
+const IS_MAC = process.platform === 'darwin';
+const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
 
 const BROWSE_RE = /^(br|bro|brow|brows|browse|ed|edi|edit)\b(.*)$/i;
 
@@ -41,6 +43,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
     private resultsUpdatedEmitter = new vscode.EventEmitter<void>();
     private busyEmitter = new vscode.EventEmitter<boolean>();
     private errorEmitter = new vscode.EventEmitter<string>();
+    private executionEmitter = new vscode.EventEmitter<'interactive' | 'programmatic'>();
 
     onDidWrite = this.writeEmitter.event;
     onDidClose = this.closeEmitter.event;
@@ -50,6 +53,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
     onDidUpdateResults = this.resultsUpdatedEmitter.event;
     onDidChangeBusy = this.busyEmitter.event;
     onDidDetectError = this.errorEmitter.event;
+    onDidStartExecution = this.executionEmitter.event;
 
     private stataProcess: StataProcess;
     private lineBuffer = '';
@@ -167,10 +171,10 @@ export class StataTerminal implements vscode.Pseudoterminal {
             `${C.cmd} /__    /   ____/   /   ____/${C.reset}\r\n` +
             `${C.cmd} ___/   /   /___/   /   /___/${C.reset}   ${C.bold}Stata Console${C.reset}\r\n` +
             `\r\n` +
-            `${C.dim} \u2318\u21E7D   Run do-file / selection\r\n` +
-            ` \u2318\u21A9    Run current line\r\n` +
-            ` \u2318L    Clear console\r\n` +
-            ` \u2303C    Break${C.reset}\r\n\r\n`
+            `${C.dim} ${IS_MAC ? '\u2318\u21E7D' : 'Ctrl+Shift+D'}   Run do-file / selection\r\n` +
+            ` ${IS_MAC ? '\u2318\u21A9' : 'Shift+Enter'}    Run current line\r\n` +
+            ` ${IS_MAC ? '\u2318L' : 'Ctrl+L'}    Clear console\r\n` +
+            ` ${IS_MAC ? '\u2303C' : 'Ctrl+C'}    Break${C.reset}\r\n\r\n`
         );
 
         this.stataProcess.on('output', (data: string) => {
@@ -236,12 +240,14 @@ export class StataTerminal implements vscode.Pseudoterminal {
                 // Intercept browse/edit — not available in console mode
                 const browseMatch = command.trim().match(BROWSE_RE);
                 if (browseMatch) {
+                    this.executionEmitter.fire('interactive');
                     this.handleBrowse(browseMatch[2]?.trim() || '');
                     return;
                 }
 
                 const cleaned = this.stripInlineComments(command);
                 this.recentInteractiveCmds.push(cleaned.trim());
+                this.executionEmitter.fire('interactive');
                 this.busyEmitter.fire(true);
                 this.stataProcess.write(cleaned);
             } else {
@@ -312,6 +318,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
     }
 
     private doSendCode(code: string, workingDir?: string): void {
+        this.executionEmitter.fire('programmatic');
         this.busyEmitter.fire(true);
         this.recentInteractiveCmds = [];
         this.lastGraphMtime = this.getFileMtime(this.graphPath);
@@ -480,7 +487,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
                 // Emit error: collect preceding error lines as the message
                 const errorLines: string[] = [];
                 for (let j = result.length - 2; j >= 0; j--) {
-                    const raw = result[j].replace(/\x1b\[[^m]*m/g, '').trim();
+                    const raw = result[j].replace(ANSI_ESCAPE_RE, '').trim();
                     if (!raw) { break; }
                     errorLines.unshift(raw);
                 }
@@ -716,5 +723,6 @@ export class StataTerminal implements vscode.Pseudoterminal {
         this.resultsUpdatedEmitter.dispose();
         this.busyEmitter.dispose();
         this.errorEmitter.dispose();
+        this.executionEmitter.dispose();
     }
 }

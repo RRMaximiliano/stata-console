@@ -12,7 +12,7 @@ import { StataHoverProvider } from './hoverProvider';
 import { StataLinkProvider } from './linkProvider';
 import { StataOutlineProvider } from './outlineProvider';
 import { StataDefinitionProvider } from './definitionProvider';
-import { getStataPath } from './config';
+import { getStataPath, getStataPathDiagnostics, getStataPathHelp } from './config';
 import { registerSthlpViewer } from './sthlpViewer';
 
 let stataTerminal: StataTerminal | undefined;
@@ -22,12 +22,113 @@ let dataPanel: DataPanel | undefined;
 let statusBarItem: vscode.StatusBarItem;
 let busyStatusItem: vscode.StatusBarItem;
 let diagnosticCollection: vscode.DiagnosticCollection;
+let outputChannel: vscode.OutputChannel;
+let lastRunTarget: { uri: vscode.Uri; line: number } | undefined;
 
 // Sidebar panels (created once in activate, persist across terminal sessions)
 let datasetPanel: DatasetPanel;
 let variablesPanel: VariablesPanel;
 let storedResultsPanel: StoredResultsPanel;
 let plotsListPanel: PlotsListPanel;
+
+function formatPathDiagnostics(): string {
+    const diagnostics = getStataPathDiagnostics();
+    const lines = [
+        'Stata Path Diagnostics',
+        `Platform: ${diagnostics.platform}`,
+        `Preferred edition: ${diagnostics.edition}`,
+        `Configured stata.stataPath: ${diagnostics.configuredPath || '(empty)'}`,
+        `Resolved configured path: ${diagnostics.resolvedConfiguredPath || '(not resolved)'}`,
+        `Selected path: ${diagnostics.selectedPath || '(none)'}`,
+        '',
+        'PATH matches:',
+        ...(diagnostics.pathMatches.length > 0 ? diagnostics.pathMatches.map((match) => `  ${match}`) : ['  (none)']),
+        '',
+        'Detected install candidates on disk:',
+        ...(diagnostics.existingCandidates.length > 0 ? diagnostics.existingCandidates.map((candidate) => `  ${candidate}`) : ['  (none)']),
+        '',
+        `Help: ${diagnostics.helpMessage}`,
+    ];
+    return lines.join('\n');
+}
+
+async function showPathDiagnostics(): Promise<void> {
+    const diagnostics = getStataPathDiagnostics();
+    const report = formatPathDiagnostics();
+    outputChannel.clear();
+    outputChannel.appendLine(report);
+    outputChannel.show(true);
+
+    const message = diagnostics.selectedPath
+        ? 'Stata path diagnostics written to the "Stata Console" output channel.'
+        : 'No Stata executable was detected. See the "Stata Console" output channel for details.';
+    const choice = diagnostics.selectedPath
+        ? await vscode.window.showInformationMessage(message, 'Copy Report')
+        : await vscode.window.showWarningMessage(message, 'Copy Report');
+
+    if (choice === 'Copy Report') {
+        await vscode.env.clipboard.writeText(report);
+        void vscode.window.showInformationMessage('Stata path diagnostics copied to clipboard.');
+    }
+}
+
+function recordRunTarget(editor: vscode.TextEditor, line: number): void {
+    lastRunTarget = {
+        uri: editor.document.uri,
+        line,
+    };
+}
+
+function findTargetLine(doc: vscode.TextDocument, errorLines: string[], fallbackLine: number): number {
+    for (const eLine of errorLines) {
+        const cmdMatch = eLine.match(/^\.\s+(.+)/);
+        if (!cmdMatch) {
+            continue;
+        }
+        const cmd = cmdMatch[1].trim();
+        for (let i = 0; i < doc.lineCount; i++) {
+            if (doc.lineAt(i).text.trim() === cmd) {
+                return i;
+            }
+        }
+    }
+    return Math.min(Math.max(fallbackLine, 0), Math.max(doc.lineCount - 1, 0));
+}
+
+async function applyStataDiagnostic(errorMsg: string): Promise<void> {
+    const errorLines = errorMsg.split('\n');
+    const displayMsg = errorLines.filter((line) => !/^r\(\d+\);/.test(line.trim())).join(' ').trim() || errorMsg;
+
+    if (lastRunTarget) {
+        try {
+            const doc = await vscode.workspace.openTextDocument(lastRunTarget.uri);
+            const targetLine = findTargetLine(doc, errorLines, lastRunTarget.line);
+            const diag = new vscode.Diagnostic(
+                doc.lineAt(targetLine).range,
+                displayMsg,
+                vscode.DiagnosticSeverity.Error,
+            );
+            diag.source = 'Stata';
+            diagnosticCollection.set(doc.uri, [diag]);
+            return;
+        } catch {
+            // Fall back to the active editor below.
+        }
+    }
+
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+        return;
+    }
+    const targetLine = findTargetLine(editor.document, errorLines, editor.selection.active.line);
+    const diag = new vscode.Diagnostic(
+        editor.document.lineAt(targetLine).range,
+        displayMsg,
+        vscode.DiagnosticSeverity.Error,
+    );
+    diag.source = 'Stata';
+    diagnosticCollection.set(editor.document.uri, [diag]);
+}
 
 function ensureConsole(): boolean {
     if (terminal && stataTerminal) {
@@ -38,10 +139,13 @@ function ensureConsole(): boolean {
     const stataPath = getStataPath();
     if (!stataPath) {
         vscode.window.showErrorMessage(
-            'Stata not found. Set the path in Settings > Stata: Stata Path.',
+            getStataPathHelp(),
+            'Run Diagnostics',
             'Open Settings'
         ).then((choice) => {
-            if (choice === 'Open Settings') {
+            if (choice === 'Run Diagnostics') {
+                void vscode.commands.executeCommand('stata.diagnosePath');
+            } else if (choice === 'Open Settings') {
                 vscode.commands.executeCommand('workbench.action.openSettings', 'stata.stataPath');
             }
         });
@@ -92,10 +196,8 @@ function ensureConsole(): boolean {
     });
 
     // Running indicator — spinner in status bar while Stata is busy
-    let lastStatusText = '';
     stataTerminal.onDidChangeBusy((busy) => {
         if (busy) {
-            lastStatusText = statusBarItem.text;
             busyStatusItem.text = '$(sync~spin) Running...';
             busyStatusItem.show();
         } else {
@@ -103,46 +205,16 @@ function ensureConsole(): boolean {
         }
     });
 
+    stataTerminal.onDidStartExecution((origin) => {
+        if (origin === 'interactive') {
+            lastRunTarget = undefined;
+            diagnosticCollection.clear();
+        }
+    });
+
     // Diagnostics from Stata errors
     stataTerminal.onDidDetectError((errorMsg) => {
-        const editor = vscode.window.activeTextEditor;
-        if (!editor) { return; }
-        const doc = editor.document;
-        // Extract the first meaningful error line (before r(NNN);)
-        const errorLines = errorMsg.split('\n');
-        const displayMsg = errorLines.filter(l => !/^r\(\d+\);/.test(l.trim())).join(' ').trim() || errorMsg;
-
-        // Try to find the line in the active editor that caused the error
-        // Look for the echoed command (line starting with ". ")
-        let targetLine = -1;
-        for (const eLine of errorLines) {
-            const cmdMatch = eLine.match(/^\.\s+(.+)/);
-            if (cmdMatch) {
-                const cmd = cmdMatch[1].trim();
-                // Search the document for this command
-                for (let i = 0; i < doc.lineCount; i++) {
-                    if (doc.lineAt(i).text.trim() === cmd) {
-                        targetLine = i;
-                        break;
-                    }
-                }
-                if (targetLine >= 0) { break; }
-            }
-        }
-
-        // Fallback: use the current cursor line or line 0
-        if (targetLine < 0) {
-            targetLine = editor.selection.active.line;
-        }
-
-        const range = doc.lineAt(targetLine).range;
-        const diag = new vscode.Diagnostic(
-            range,
-            displayMsg,
-            vscode.DiagnosticSeverity.Error,
-        );
-        diag.source = 'Stata';
-        diagnosticCollection.set(doc.uri, [diag]);
+        void applyStataDiagnostic(errorMsg);
     });
 
     terminal = vscode.window.createTerminal({
@@ -167,6 +239,7 @@ function ensureConsole(): boolean {
             variablesPanel.refreshFromFile('');
             storedResultsPanel.refreshFromFile('');
             plotsListPanel.clear();
+            lastRunTarget = undefined;
             statusBarItem.text = '$(terminal) Stata (inactive)';
             statusBarItem.tooltip = 'Click to open Stata Console';
             vscode.commands.executeCommand('setContext', 'stata.consoleActive', false);
@@ -179,6 +252,9 @@ function ensureConsole(): boolean {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+    outputChannel = vscode.window.createOutputChannel('Stata Console');
+    context.subscriptions.push(outputChannel);
+
     // Status bar
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     statusBarItem.text = '$(terminal) Stata (inactive)';
@@ -229,6 +305,12 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     context.subscriptions.push(
+        vscode.commands.registerCommand('stata.diagnosePath', async () => {
+            await showPathDiagnostics();
+        })
+    );
+
+    context.subscriptions.push(
         vscode.commands.registerCommand('stata.run', () => {
             const editor = vscode.window.activeTextEditor;
             if (!editor) { return; }
@@ -238,12 +320,14 @@ export function activate(context: vscode.ExtensionContext) {
                 const code = editor.document.getText(editor.selection);
                 if (code.trim() === '') { return; }
                 if (!ensureConsole()) { return; }
+                recordRunTarget(editor, editor.selection.start.line);
                 stataTerminal!.sendCode(code, fileDir);
             } else {
                 const filePath = editor.document.fileName;
                 if (!filePath) { return; }
                 editor.document.save().then(() => {
                     if (!ensureConsole()) { return; }
+                    recordRunTarget(editor, editor.selection.active.line);
                     stataTerminal!.sendCode(`do "${filePath}"`, fileDir);
                 });
             }
@@ -271,12 +355,14 @@ export function activate(context: vscode.ExtensionContext) {
                 const trimmed = code.trim();
                 if (trimmed === '' || trimmed.startsWith('*') || trimmed.startsWith('//')) { return; }
                 if (!ensureConsole()) { return; }
+                recordRunTarget(editor, lineNum);
                 stataTerminal!.sendCode(code, path.dirname(editor.document.fileName));
             } else {
                 // Has selection — run it
                 const code = editor.document.getText(editor.selection);
                 if (code.trim() === '') { return; }
                 if (!ensureConsole()) { return; }
+                recordRunTarget(editor, editor.selection.start.line);
                 stataTerminal!.sendCode(code, path.dirname(editor.document.fileName));
             }
         })
@@ -291,6 +377,7 @@ export function activate(context: vscode.ExtensionContext) {
             if (!filePath) { return; }
             editor.document.save().then(() => {
                 if (!ensureConsole()) { return; }
+                recordRunTarget(editor, editor.selection.active.line);
                 stataTerminal!.sendCode(`do "${filePath}"`, path.dirname(filePath));
             });
         })

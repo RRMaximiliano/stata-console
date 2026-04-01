@@ -80,18 +80,13 @@ body {
 
     private parseCsv(csvPath: string): { headers: string[]; rows: string[][]; numericCols: boolean[] } {
         const content = fs.readFileSync(csvPath, 'utf-8');
-        const lines = this.splitCsvLines(content);
-        if (lines.length === 0) {
+        const parsed = this.parseCsvContent(content);
+        if (parsed.length === 0) {
             return { headers: [], rows: [], numericCols: [] };
         }
         const rowLimit = vscode.workspace.getConfiguration('stata').get<number>('browseRowLimit', 10000);
-        const headers = this.parseCsvLine(lines[0]);
-        const rows: string[][] = [];
-        for (let i = 1; i < lines.length; i++) {
-            if (lines[i].trim() === '') { continue; }
-            if (rows.length >= rowLimit) { break; }
-            rows.push(this.parseCsvLine(lines[i]));
-        }
+        const [headers, ...dataRows] = parsed;
+        const rows = dataRows.filter((row) => row.some((cell) => cell.trim() !== '')).slice(0, rowLimit);
         // Detect numeric columns by sampling first 20 rows
         const numericCols = headers.map((_, ci) => {
             let numCount = 0, total = 0;
@@ -106,51 +101,42 @@ body {
         return { headers, rows, numericCols };
     }
 
-    private splitCsvLines(content: string): string[] {
-        const lines: string[] = [];
-        let current = '';
+    private parseCsvContent(content: string): string[][] {
+        const rows: string[][] = [];
+        let currentRow: string[] = [];
+        let currentField = '';
         let inQuotes = false;
+
         for (let i = 0; i < content.length; i++) {
             const ch = content[i];
-            if (ch === '"') {
-                inQuotes = !inQuotes;
-                current += ch;
-            } else if ((ch === '\n' || ch === '\r') && !inQuotes) {
-                if (ch === '\r' && content[i + 1] === '\n') { i++; }
-                lines.push(current);
-                current = '';
-            } else {
-                current += ch;
-            }
-        }
-        if (current.trim() !== '') {
-            lines.push(current);
-        }
-        return lines;
-    }
 
-    private parseCsvLine(line: string): string[] {
-        const fields: string[] = [];
-        let current = '';
-        let inQuotes = false;
-        for (let i = 0; i < line.length; i++) {
-            const ch = line[i];
             if (ch === '"') {
-                if (inQuotes && line[i + 1] === '"') {
-                    current += '"';
+                if (inQuotes && content[i + 1] === '"') {
+                    currentField += '"';
                     i++;
                 } else {
                     inQuotes = !inQuotes;
                 }
             } else if (ch === ',' && !inQuotes) {
-                fields.push(current);
-                current = '';
+                currentRow.push(currentField);
+                currentField = '';
+            } else if ((ch === '\n' || ch === '\r') && !inQuotes) {
+                if (ch === '\r' && content[i + 1] === '\n') { i++; }
+                currentRow.push(currentField);
+                rows.push(currentRow);
+                currentRow = [];
+                currentField = '';
             } else {
-                current += ch;
+                currentField += ch;
             }
         }
-        fields.push(current);
-        return fields;
+
+        if (currentField.length > 0 || currentRow.length > 0) {
+            currentRow.push(currentField);
+            rows.push(currentRow);
+        }
+
+        return rows;
     }
 
     private getHtml(data: { headers: string[]; rows: string[][]; numericCols: boolean[] }, showing: number, total: number): string {
@@ -160,7 +146,7 @@ body {
 
         const headerCells = headers.map((h, i) => {
             const align = numericCols[i] ? ' class="num"' : '';
-            return `<th data-col="${i}"${align} onclick="sortBy(${i})">${esc(h)}<span class="arrow"></span></th>`;
+            return `<th data-col="${i}"${align}>${esc(h)}<span class="arrow"></span></th>`;
         }).join('');
 
         const bodyRows = rows.map((row, ri) => {
@@ -290,8 +276,9 @@ ${bodyRows}
     let sortCol = -1, sortAsc = true;
     const tbody = document.getElementById('tbody');
     const searchInput = document.getElementById('search');
+    const headerEls = Array.from(document.querySelectorAll('th[data-col]'));
 
-    window.sortBy = function(col) {
+    function sortBy(col) {
         const rows = Array.from(tbody.querySelectorAll('tr'));
         if (sortCol === col) { sortAsc = !sortAsc; } else { sortCol = col; sortAsc = true; }
         rows.sort((a, b) => {
@@ -305,7 +292,16 @@ ${bodyRows}
         document.querySelectorAll('.arrow').forEach(el => el.textContent = '');
         const th = document.querySelector('th[data-col="' + col + '"] .arrow');
         if (th) th.textContent = sortAsc ? ' \u25B2' : ' \u25BC';
-    };
+    }
+
+    headerEls.forEach((th) => {
+        th.addEventListener('click', () => {
+            const col = Number(th.getAttribute('data-col'));
+            if (!Number.isNaN(col)) {
+                sortBy(col);
+            }
+        });
+    });
 
     const matchEl = document.getElementById('matchCount');
     searchInput.addEventListener('input', function() {

@@ -1,5 +1,11 @@
 # Stata Console for VS Code
 
+[![CI](https://github.com/RRMaximiliano/stata-console/actions/workflows/ci.yml/badge.svg)](https://github.com/RRMaximiliano/stata-console/actions/workflows/ci.yml)
+[![VS Marketplace](https://img.shields.io/visual-studio-marketplace/v/rrmaximiliano.stata-console)](https://marketplace.visualstudio.com/items?itemName=rrmaximiliano.stata-console)
+[![Downloads](https://img.shields.io/visual-studio-marketplace/d/rrmaximiliano.stata-console)](https://marketplace.visualstudio.com/items?itemName=rrmaximiliano.stata-console)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/rrmaximiliano.stata-console)](https://marketplace.visualstudio.com/items?itemName=rrmaximiliano.stata-console)
+[![License](https://img.shields.io/github/license/RRMaximiliano/stata-console)](https://github.com/RRMaximiliano/stata-console/blob/main/LICENSE)
+
 This extension embeds an interactive Stata session directly inside Visual Studio Code. Instead of switching between VS Code and Stata's GUI, you get a terminal, data viewer, variables panel, plots pane, and stored results inspector all within the editor.
 
 The current design is inspired by [Positron](https://positron.posit.co/) and how it integrates R into the IDE, i.e., a unified workspace where the console, environment, data viewer, and plots live alongside your code.
@@ -23,6 +29,7 @@ Right now, the extension does the following:
 - **Go to definition.** `Cmd+Click` on a program name to jump to its `program define` in the same file.
 - **File links.** Paths in `do`, `run`, `use`, `save`, `import using`, `graph export`, and similar commands are clickable — `Cmd+Click` to open the referenced file. I haven not tested this with globals. 
 - **Error diagnostics.** When Stata returns an error, the offending line in the editor gets a red underline with the error message. Cleared on the next run.
+- **Path diagnostics.** Run `Stata: Diagnose Stata Path Detection` from the Command Palette to see exactly which executable was selected, what was found on `PATH`, and which install candidates were discovered on disk.
 
 ## Keyboard shortcuts
 
@@ -50,7 +57,7 @@ The Stata icon in the Activity Bar opens four panels:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `stata.stataPath` | (auto-detect) | Full path to the Stata executable |
+| `stata.stataPath` | (auto-detect) | Full path to the Stata executable. On macOS you can also point it at a `Stata*.app` bundle or its `Contents/MacOS` folder. |
 | `stata.stataEdition` | MP | Preferred edition: MP, SE, or BE |
 | `stata.browseRowLimit` | 10000 | Max rows shown in the Data Viewer |
 | `stata.colors.prompt` | `#4E9A6A` | Color of the `. ` prompt (hex) |
@@ -59,7 +66,7 @@ The Stata icon in the Activity Bar opens four panels:
 | `stata.colors.tableSeparator` | `#B4B4B4` | Color of table separator lines (hex) |
 | `stata.colors.dim` | `#787878` | Color of dimmed/info text (hex) |
 
-Auto-detection searches standard macOS installation paths for Stata versions 14 through 19. Console colors take effect when the Stata console is opened or restarted.
+Auto-detection now checks your shell `PATH` first, then common install locations. On macOS it also scans standard app bundles and falls back to Spotlight (`mdfind`) so renamed or relocated installs are more likely to be found. Console colors take effect when the Stata console is opened or restarted.
 
 ## How it works
 
@@ -87,8 +94,8 @@ Search for "Stata Console" in the VS Code Extensions panel (`Cmd+Shift+X`), or v
 
 **From a `.vsix` file:**
 Download the latest `.vsix` from [GitHub Releases](https://github.com/RRMaximiliano/stata-console/releases), then run:
-```
-code --install-extension stata-console-0.3.0.vsix
+``` 
+code --install-extension stata-console-0.3.2.vsix
 ```
 
 **From source:**
@@ -96,15 +103,19 @@ code --install-extension stata-console-0.3.0.vsix
 git clone https://github.com/RRMaximiliano/stata-console.git
 cd stata-console
 npm install
-npm run compile
+npm run verify
 ```
 Then open the folder in VS Code and press `F5` to launch the Extension Development Host.
 
 ## Requirements
 
-- **macOS only** — this extension has only been tested on macOS. Windows and Linux are not currently supported. On Windows, Stata is a GUI application and does not provide the console-mode interface that this extension relies on. Contributions for Windows/Linux support are welcome.
+- **macOS or Linux** with a Stata console executable available. Windows is not currently supported because Stata there does not expose the same console stdin/stdout interface this extension relies on.
 - Stata 14 or later (MP, SE, or BE) installed on your system
 - VS Code 1.80.0 or later
+
+### macOS note
+
+If auto-detect misses a valid install on macOS, the usual cause is that the shell utility symlink was never installed or is stale after moving the app bundle. Open the Stata GUI and choose `Stata > Install Terminal Utility...`, or set `stata.stataPath` explicitly to a bundle executable such as `/Applications/Stata/StataMP.app/Contents/MacOS/stata-mp`.
 
 ## Acknowledgments
 
