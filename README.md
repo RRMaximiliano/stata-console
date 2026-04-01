@@ -1,8 +1,8 @@
 # Stata Console for VS Code
 
 [![CI](https://github.com/RRMaximiliano/stata-console/actions/workflows/ci.yml/badge.svg)](https://github.com/RRMaximiliano/stata-console/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/github/package-json/v/RRMaximiliano/stata-console)](https://github.com/RRMaximiliano/stata-console/blob/main/package.json)
-[![Release](https://img.shields.io/github/v/release/RRMaximiliano/stata-console?display_name=tag)](https://github.com/RRMaximiliano/stata-console/releases)
+[![Extension Version](https://img.shields.io/github/package-json/v/RRMaximiliano/stata-console?label=extension%20version)](https://github.com/RRMaximiliano/stata-console/blob/main/package.json)
+[![Latest GitHub Release](https://img.shields.io/github/v/release/RRMaximiliano/stata-console?display_name=tag&label=github%20release)](https://github.com/RRMaximiliano/stata-console/releases)
 [![License](https://img.shields.io/github/license/RRMaximiliano/stata-console)](https://github.com/RRMaximiliano/stata-console/blob/main/LICENSE)
 
 This extension embeds an interactive Stata session directly inside Visual Studio Code. Instead of switching between VS Code and Stata's GUI, you get a terminal, data viewer, variables panel, plots pane, and stored results inspector all within the editor.
