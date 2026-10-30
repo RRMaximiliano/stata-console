@@ -335,6 +335,16 @@
           ],
           "description": "Which Stata edition to use. Auto-detection will prefer this edition."
         },
+        "stata.console.syntaxHighlighting": {
+          "type": "boolean",
+          "default": true,
+          "description": "Syntax-highlight commands in the Stata console (echoed commands and the line you type), using colors that follow the light or dark theme."
+        },
+        "stata.console.matchTerminalWidth": {
+          "type": "boolean",
+          "default": true,
+          "description": "Set Stata's line width (set linesize) to the console width, so long commands and output wrap less. Minimum 80."
+        },
         "stata.browseRowLimit": {
           "type": "number",
           "default": 10000,

@@ -9,6 +9,9 @@
 - `Diagnose Stata Path Detection` now reports the backend, install directory, and Python version.
 
 ### Console
+- Syntax highlighting in the console, radian-style: echoed commands and the line you type are colored like the editor (Dark+/Light+, following the theme). Setting: `stata.console.syntaxHighlighting`.
+- Stata's `linesize` follows the console width, so long lines wrap less. Setting: `stata.console.matchTerminalWidth`.
+- Cleaner output: no stray `.` prompt lines or leaked internal commands, and one blank line between commands.
 - Completion is detected exactly, so the prompt and the busy indicator no longer rely on output going quiet.
 - Multi-line input (`forvalues … {`, `program … end`, `mata … end`, `///`) can be typed interactively.
 - Line editing: arrow keys, Home/End, and Ctrl+A/E/U/K/W. Multi-line paste and type-ahead work.

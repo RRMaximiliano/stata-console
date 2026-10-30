@@ -13,6 +13,7 @@ export type InputEvent =
 
 const ESC = String.fromCharCode(27);
 const escape = (pattern: string) => new RegExp(`^${ESC}${pattern}`);
+const ANSI_COLOR_RE = new RegExp(`${ESC}\\[[0-9;]*m`, 'g');
 
 const ESCAPE_KEYS: [RegExp, InputKey | null][] = [
     [escape('\\[(?:\\d+;)?\\d*A'), 'up'],
@@ -119,6 +120,10 @@ export class LineEditor {
     private pos = 0;
     /** Colored prompt used when the line has to be redrawn. */
     prompt = '';
+    /** Colors the typed text (redraws on every edit when set). */
+    highlight?: (text: string) => string;
+    /** Terminal width, when known. Lines that would wrap are not redrawn per keystroke. */
+    columns = 0;
 
     get text(): string {
         return this.chars.join('');
@@ -138,14 +143,14 @@ export class LineEditor {
         const atEnd = this.pos === this.chars.length;
         this.chars.splice(this.pos, 0, ...inserted);
         this.pos += inserted.length;
-        return atEnd ? text : this.redraw();
+        return atEnd && !this.canHighlight() ? text : this.redraw();
     }
 
     backspace(): string {
         if (this.pos === 0) { return ''; }
         const atEnd = this.pos === this.chars.length;
         this.chars.splice(--this.pos, 1);
-        return atEnd ? '\b \b' : this.redraw();
+        return atEnd && !this.canHighlight() ? '\b \b' : this.redraw();
     }
 
     delete(): string {
@@ -209,6 +214,14 @@ export class LineEditor {
     /** Redraw prompt and line, leaving the cursor at its logical position. */
     redraw(): string {
         const back = this.chars.length - this.pos;
-        return `\r\x1b[2K${this.prompt}${this.text}${back > 0 ? `\x1b[${back}D` : ''}`;
+        const text = this.canHighlight() ? this.highlight!(this.text) : this.text;
+        return `\r\x1b[2K${this.prompt}${text}${back > 0 ? `\x1b[${back}D` : ''}`;
+    }
+
+    /** Highlighting redraws the row, which only works while the line fits on it. */
+    private canHighlight(): boolean {
+        if (!this.highlight) { return false; }
+        const promptWidth = this.prompt.replace(ANSI_COLOR_RE, '').length;
+        return this.columns <= 0 || promptWidth + this.chars.length < this.columns;
     }
 }

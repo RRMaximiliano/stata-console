@@ -24,6 +24,7 @@ const fake = {
     EventEmitter,
     settings,
     window: {
+        activeColorTheme: { kind: 2 },
         showWarningMessage: () => Promise.resolve(undefined),
     },
     commands: {

@@ -18,6 +18,7 @@ import {
     stataPathText,
     stataQuote,
 } from './stataCode';
+import { DARK_HIGHLIGHT, LIGHT_HIGHLIGHT, highlightStata, type HighlightPalette } from './stataHighlight';
 
 /** Convert hex color (#RRGGBB) to ANSI 24-bit escape code */
 function hexToAnsi(hex: string): string {
@@ -44,6 +45,21 @@ function loadColors(): Palette {
 }
 
 let C = loadColors();
+
+/** Code colors for the current theme, or undefined when highlighting is off. */
+function loadHighlight(): HighlightPalette | undefined {
+    if (!vscode.workspace.getConfiguration('stata.console').get<boolean>('syntaxHighlighting', true)) {
+        return undefined;
+    }
+    const kind = vscode.window?.activeColorTheme?.kind;
+    // ColorThemeKind: 1 Light, 4 HighContrastLight
+    return kind === 1 || kind === 4 ? LIGHT_HIGHLIGHT : DARK_HIGHLIGHT;
+}
+
+/** Stata's line width for a terminal this wide (Stata accepts 40-255; tables need 80). */
+export function linesizeFor(columns: number): number {
+    return Math.max(80, Math.min(255, Math.floor(columns) - 1));
+}
 const IS_MAC = process.platform === 'darwin';
 /** How long Break may take before the console suggests restarting (PyStata). */
 const BREAK_GRACE_MS = 4000;
@@ -110,6 +126,11 @@ export class StataTerminal implements vscode.Pseudoterminal {
     private backend: StataBackend;
     private processor: OutputProcessor;
     private editor = new LineEditor();
+    private hl: HighlightPalette | undefined;
+    private themeListener: vscode.Disposable | undefined;
+    /** Stata linesize wanted for the terminal width, and the one last sent. */
+    private wantedLinesize: number | undefined;
+    private appliedLinesize: number | undefined;
     private accumulator = new InputAccumulator();
 
     private batches = new Map<number, Batch>();
@@ -158,6 +179,8 @@ export class StataTerminal implements vscode.Pseudoterminal {
         this.processor = new OutputProcessor({
             palette: C,
             internalMarkers: [stataPathText(this.tempDir)],
+            highlight: (code, statementStart) => this.highlight(code, statementStart),
+            spaceCommands: true,
             onError: (message) => {
                 const first = this.batches.values().next().value as Batch | undefined;
                 this.errorEmitter.fire({
@@ -173,6 +196,9 @@ export class StataTerminal implements vscode.Pseudoterminal {
         this.isOpen = true;
         C = loadColors(); // pick up any settings changes
         this.processor.setPalette(C);
+        this.hl = loadHighlight();
+        this.editor.highlight = (text) => this.highlight(text, this.inputStartsStatement());
+        this.themeListener = vscode.window?.onDidChangeActiveColorTheme?.(() => { this.hl = loadHighlight(); });
 
         const run = IS_MAC ? '⌘⇧D' : 'Ctrl+Shift+D';
         const line = IS_MAC ? '⌘↩ / Shift+Enter' : 'Ctrl+Enter / Shift+Enter';
@@ -436,6 +462,12 @@ export class StataTerminal implements vscode.Pseudoterminal {
     /** Submit commands to the backend, tracking busy state until `done`. */
     private submit(commands: string[], batch: Batch): number {
         const wasIdle = this.batches.size === 0;
+        if (this.wantedLinesize !== undefined && this.wantedLinesize !== this.appliedLinesize) {
+            const set = `quietly set linesize ${this.wantedLinesize}`;
+            commands = [set, ...commands];
+            batch = { ...batch, echoes: [{ cmd: set, lines: 1 }, ...batch.echoes] };
+            this.appliedLinesize = this.wantedLinesize;
+        }
         this.beginOutput();
         let id: number;
         try {
@@ -694,6 +726,25 @@ export class StataTerminal implements vscode.Pseudoterminal {
             : this.history[this.history.length - 1 - this.historyIndex]));
     }
 
+    // --- Highlighting and width ---
+
+    private highlight(code: string, statementStart: boolean): string {
+        return this.hl ? highlightStata(code, this.hl, statementStart) : `${C.cmd}${code}${C.reset}`;
+    }
+
+    /** The line being typed starts a statement unless it continues a `///` or comment. */
+    private inputStartsStatement(): boolean {
+        return !this.accumulator.pending || this.accumulator.continuation.kind === 'brace';
+    }
+
+    /** VS Code reports the terminal size; Stata's linesize follows it from the next command. */
+    setDimensions(dimensions: vscode.TerminalDimensions): void {
+        this.editor.columns = dimensions.columns;
+        if (vscode.workspace.getConfiguration('stata.console').get<boolean>('matchTerminalWidth', true)) {
+            this.wantedLinesize = linesizeFor(dimensions.columns);
+        }
+    }
+
     // --- Prompt ---
 
     /** Stata-style prompt: `. ` normally, `  2. ` inside a brace block, `> ` otherwise. */
@@ -739,6 +790,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
         if (this.closed) { return; }
         this.closed = true;
         this.dirWatcher?.close();
+        this.themeListener?.dispose();
         this.dirWatcher = null;
         if (this.graphDebounce) { clearTimeout(this.graphDebounce); }
         if (this.partialTimer) { clearTimeout(this.partialTimer); }

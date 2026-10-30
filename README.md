@@ -13,7 +13,7 @@ The current design is inspired by [Positron](https://positron.posit.co/) and how
 
 Right now, the extension does the following:
 
-- **Console.** A pseudoterminal wraps Stata's command-line interface. You type commands, see output, and interact with Stata without leaving VS Code. The output is color-coded: commands in blue, errors in red, table separators in gray.
+- **Console.** A pseudoterminal wraps Stata's command-line interface. You type commands, see output, and interact with Stata without leaving VS Code. Commands are syntax-highlighted as they echo and as you type, with colors that follow your light or dark theme; errors show in red and table separators in gray. Stata's line width follows the console width, so long commands and wide output wrap less.
 - **Run code from the editor.** Select lines in a `.do` file and press `Cmd+Shift+D` (`Ctrl+Shift+D` on Windows/Linux) to execute them. `Cmd+Enter` (`Ctrl+Enter`) or `Shift+Enter` runs the current line and advances the cursor. Right-click for context menu options. The extension writes your code to a temporary do-file and runs it, so comments (`//`, `///`, `/* */`) work correctly.
 - **Data Viewer.** Type `browse` in the console or include it in a do-file. Instead of failing (as it normally does in console mode), the extension exports the data to CSV and displays it in a spreadsheet-like panel with sortable columns, row numbers, search filtering, and a row count. Supports `browse varlist if condition in range` syntax. Only the first `stata.browseRowLimit` rows are exported, and the viewer shows the true total. However, if you use dofiles within dofiles, the browse command won't work. I don't know how to fix it yet. So, just remove `browse` if you are running, for example, a `00_main.do`
 - **Variables panel.** Shows every variable in the loaded dataset with its name, type, and label. Click a variable to insert its name at the cursor. Auto-refreshes after each code execution.
@@ -62,6 +62,8 @@ The Stata icon in the Activity Bar opens four panels:
 | `stata.pythonPath` | (auto-detect) | Python 3.8+ for the PyStata backend (64-bit on Windows). |
 | `stata.installDir` | (auto-detect) | Stata install directory containing `utilities/pystata`, e.g. `C:\Program Files\Stata19`. |
 | `stata.browseRowLimit` | 10000 | Max rows shown in the Data Viewer |
+| `stata.console.syntaxHighlighting` | `true` | Syntax-highlight commands in the console |
+| `stata.console.matchTerminalWidth` | `true` | Set Stata's `linesize` to the console width (minimum 80) |
 | `stata.colors.prompt` | `#4E9A6A` | Color of the `. ` prompt (hex) |
 | `stata.colors.command` | `#569CD6` | Color of echoed commands (hex) |
 | `stata.colors.error` | `#CC3E44` | Color of error messages (hex) |

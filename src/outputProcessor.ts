@@ -21,6 +21,13 @@ export interface OutputProcessorOptions {
     internalMarkers: string[];
     /** Called once per Stata error with the message lines (including `r(N);`). */
     onError?: (message: string) => void;
+    /**
+     * Syntax-highlights echoed command text. `statementStart` is false for
+     * `> ` continuations. Without it, echoes use the flat command color.
+     */
+    highlight?: (code: string, statementStart: boolean) => string;
+    /** Put a blank line before each echoed command so commands and their output read as groups. */
+    spaceCommands?: boolean;
 }
 
 const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
@@ -44,6 +51,8 @@ export class OutputProcessor {
     private echoDepth = 0;
     private inError = false;
     private afterEndOfDoFile = false;
+    /** Inside a command echo: numbered lines (`  2. ...`) belong to it. */
+    private inEcho = false;
     private errorBlock: string[] = [];
     private expectedEchoes: { batchId: number; cmd: string; lines: number }[] = [];
     private palette: Palette;
@@ -204,6 +213,7 @@ export class OutputProcessor {
         if (stripped === '') {
             this.errorBlock = [];
             this.inError = false;
+            this.inEcho = false;
             return BLANK;
         }
         // The prompt Stata prints at do-file level between commands
@@ -242,10 +252,31 @@ export class OutputProcessor {
         if (/^[-=+|]+$/.test(stripped) || /^[-]+\+[-]+/.test(stripped)) {
             return `${p.table}${line}${p.reset}`;
         }
-        if (/^\. /.test(stripped) || stripped === '.' || isContinuation) {
-            return `${p.cmd}${line}${p.reset}`;
+        return this.colorizeEcho(line, stripped, isContinuation) ?? line;
+    }
+
+    /** Echoed commands: `. cmd`, `> continuation`, and numbered block lines. */
+    private colorizeEcho(line: string, stripped: string, isContinuation: boolean): string | null {
+        const p = this.palette;
+        const hl = this.options.highlight;
+        const lead = line.slice(0, line.length - stripped.length);
+        if (/^\. /.test(stripped) || stripped === '.') {
+            this.inEcho = true;
+            if (this.options.spaceCommands) { this.pendingBlank = true; }
+            if (!hl) { return `${p.cmd}${line}${p.reset}`; }
+            return `${lead}${p.prompt}.${p.reset} ${hl(stripped.slice(2), true)}`;
         }
-        return line;
+        if (isContinuation) {
+            if (!hl) { return `${p.cmd}${line}${p.reset}`; }
+            return `${lead}${p.dim}>${p.reset} ${hl(stripped.slice(2), false)}`;
+        }
+        const numbered = this.inEcho ? line.match(/^(\s*\d+\.)( ?)(.*)$/) : null;
+        if (numbered) {
+            if (!hl) { return `${p.cmd}${line}${p.reset}`; }
+            return `${p.dim}${numbered[1]}${p.reset}${numbered[2]}${hl(numbered[3], true)}`;
+        }
+        this.inEcho = false;
+        return null;
     }
 
     /** Strip color codes (for tests and message extraction). */
