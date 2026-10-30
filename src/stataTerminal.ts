@@ -169,6 +169,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
         this.processor.setPalette(C);
 
         const run = IS_MAC ? '⌘⇧D' : 'Ctrl+Shift+D';
+        const line = IS_MAC ? '⌘↩ / Shift+Enter' : 'Ctrl+Enter / Shift+Enter';
         const clear = IS_MAC ? '⌘L' : 'Ctrl+L';
         const brk = IS_MAC ? '⌃C' : 'Ctrl+C';
         this.out(
@@ -178,7 +179,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
             `${C.cmd} ___/   /   /___/   /   /___/${C.reset}   ${C.bold}Stata Console${C.reset}\r\n` +
             `\r\n` +
             `${C.dim} ${run}   Run do-file / selection\r\n` +
-            ` Shift+Enter    Run current line\r\n` +
+            ` ${line}    Run current line\r\n` +
             ` ${clear}    Clear console\r\n` +
             ` ${brk}    Break${C.reset}\r\n\r\n`
         );
@@ -216,6 +217,9 @@ export class StataTerminal implements vscode.Pseudoterminal {
 
         const workspaceDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         this.out(`${C.dim}${this.backend.label}${C.reset}\r\n`);
+        if (this.backend.kind === 'pystata') {
+            this.out(`${C.dim}Starting Stata…${C.reset}\r\n`);
+        }
         this.backend.start(workspaceDir || os.homedir());
 
         for (const run of this.pendingRuns.splice(0)) {

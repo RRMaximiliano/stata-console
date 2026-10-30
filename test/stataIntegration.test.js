@@ -1,6 +1,8 @@
 // Runs the generated Stata code through a real Stata. Opt in with
 //   STATA_INTEGRATION=1 npm test
 // (STATA_BIN overrides the console binary, default /usr/local/bin/stata-mp).
+// STATA_BACKEND=pystata runs the terminal tests through the PyStata bridge
+// (STATA_DIR, default /Applications/StataNow; STATA_PYTHON, default python3).
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -15,6 +17,7 @@ const skip = enabled ? false : 'set STATA_INTEGRATION=1 (and have a Stata consol
 const fakeVscode = require('./helpers/fakeVscode.js').install();
 const { buildBrowseHelper, buildPostDoFile, rewriteCode } = require('../out/stataCode.js');
 const { ConsoleBackend } = require('../out/stataProcess.js');
+const { PyStataBackend } = require('../out/pystataBackend.js');
 const { StataTerminal } = require('../out/stataTerminal.js');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -263,7 +266,15 @@ test('rewritten user code runs: inline graph exports, browse export, CRLF input'
 async function openSession(t, settings = {}) {
     Object.assign(fakeVscode.settings, settings);
     t.after(() => { for (const key of Object.keys(settings)) { delete fakeVscode.settings[key]; } });
-    const term = new StataTerminal(new ConsoleBackend(BIN));
+    const backend = process.env.STATA_BACKEND === 'pystata'
+        ? new PyStataBackend({
+            pythonPath: process.env.STATA_PYTHON || 'python3',
+            stataDir: process.env.STATA_DIR || '/Applications/StataNow',
+            edition: 'mp',
+            bridgePath: path.join(__dirname, '..', 'python', 'stata_bridge.py'),
+        })
+        : new ConsoleBackend(BIN);
+    const term = new StataTerminal(backend);
     t.after(() => term.dispose());
     const session = { term, text: '', busy: false, graphs: [], browses: [], errors: [], vars: [] };
     term.onDidWrite((s) => { session.text += s; });

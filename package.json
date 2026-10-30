@@ -230,9 +230,9 @@
       },
       {
         "command": "stata.clearConsole",
-        "key": "ctrl+k ctrl+l",
-        "mac": "cmd+k cmd+l",
-        "when": "terminalFocus && stata.consoleActive"
+        "key": "ctrl+l",
+        "mac": "cmd+l",
+        "when": "terminalFocus && stata.terminalFocused"
       },
       {
         "command": "stata.previewSthlp",

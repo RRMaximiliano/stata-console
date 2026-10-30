@@ -51,8 +51,8 @@ test('bindings are language scoped and ordinary terminal Ctrl+L remains availabl
     assert.ok(bindings.some(binding => binding.command === 'stata.runSelection' && binding.key === 'shift+enter'));
     assert.ok(bindings.some(binding => binding.command === 'stata.run' && binding.key === 'ctrl+shift+d' && binding.mac === 'cmd+shift+d'));
     const clear = bindings.find(binding => binding.command === 'stata.clearConsole');
-    assert.match(clear.when, /terminalFocus && stata.consoleActive/);
-    assert.notEqual(clear.key, 'ctrl+l');
+    // Only the focused Stata terminal; ordinary terminals keep Ctrl+L
+    assert.match(clear.when, /terminalFocus && stata.terminalFocused/);
     for (const binding of bindings.filter(binding => ['stata.run', 'stata.runSelection'].includes(binding.command))) {
         assert.match(binding.when, /editorLangId == stata/);
         assert.match(binding.when, /resourceExtname != .sthlp/);

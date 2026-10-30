@@ -75,7 +75,6 @@ def main():
             streaming('on')
         config.stlib.StataSO_SetBreak.argtypes = []
         config.stlib.StataSO_SetBreak.restype = None
-        stata.run('set more off', echo=False)
     except Exception as exc:
         detail = ' '.join(str(exc).split()) or type(exc).__name__
         output.control({

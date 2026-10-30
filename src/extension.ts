@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import * as path from 'path';
 import { StataTerminal, type RunTarget, type StataErrorEvent } from './stataTerminal';
 import { GraphPanel } from './graphPanel';
@@ -30,6 +31,21 @@ let datasetPanel: DatasetPanel;
 let variablesPanel: VariablesPanel;
 let storedResultsPanel: StoredResultsPanel;
 let plotsListPanel: PlotsListPanel;
+let datasetVariables: string[] = [];
+
+function readVariableNames(varsPath: string): string[] {
+    try {
+        return fs.readFileSync(varsPath, 'utf-8').split(/\r?\n/).slice(1)
+            .map((line) => line.split('\t')[0]).filter(Boolean);
+    } catch {
+        return [];
+    }
+}
+
+function updateStataTerminalFocus(): void {
+    void vscode.commands.executeCommand('setContext', 'stata.terminalFocused',
+        !!terminal && vscode.window.activeTerminal === terminal);
+}
 
 async function formatPathDiagnostics(diagnostics = getStataPathDiagnostics(), backend?: BackendDiagnostics): Promise<string> {
     backend ??= await getBackendDiagnostics(diagnostics.selectedPath);
@@ -220,9 +236,9 @@ async function createConsole(): Promise<StataTerminal | undefined> {
     // Data + Variables panels auto-update
     session.onDidUpdateVariables((meta) => {
         datasetPanel.update(meta);
-        variablesPanel.refreshFromFile(
-            path.join(session.tempDir, '_vars.tsv')
-        );
+        const varsPath = path.join(session.tempDir, '_vars.tsv');
+        variablesPanel.refreshFromFile(varsPath);
+        datasetVariables = readVariableNames(varsPath);
         if (meta.obs > 0) {
             const name = meta.filename
                 ? meta.filename.replace(/^.*[/\\]/, '').replace(/\.dta$/i, '')
@@ -271,6 +287,7 @@ async function createConsole(): Promise<StataTerminal | undefined> {
     statusBarItem.text = '$(terminal) Stata';
     statusBarItem.tooltip = `Stata Console — ${backend.label}`;
     vscode.commands.executeCommand('setContext', 'stata.consoleActive', true);
+    updateStataTerminalFocus();
 
     const disposable = vscode.window.onDidCloseTerminal((t) => {
         if (t === term) {
@@ -297,6 +314,7 @@ function teardownConsole(term: vscode.Terminal): void {
     dataPanel = undefined;
     datasetPanel.update();
     variablesPanel.refreshFromFile('');
+    datasetVariables = [];
     storedResultsPanel.refreshFromFile('');
     plotsListPanel.clear();
     diagnosticCollection.clear();
@@ -304,6 +322,7 @@ function teardownConsole(term: vscode.Terminal): void {
     statusBarItem.text = '$(terminal) Stata (inactive)';
     statusBarItem.tooltip = 'Click to open Stata Console';
     vscode.commands.executeCommand('setContext', 'stata.consoleActive', false);
+    updateStataTerminalFocus();
 }
 
 function workingDirFor(doc: vscode.TextDocument): string | undefined {
@@ -352,6 +371,9 @@ export function activate(context: vscode.ExtensionContext) {
     // Diagnostics collection for Stata errors
     diagnosticCollection = vscode.languages.createDiagnosticCollection('stata');
     context.subscriptions.push(diagnosticCollection);
+
+    // Scope console keybindings (e.g. Clear Console) to the Stata terminal only
+    context.subscriptions.push(vscode.window.onDidChangeActiveTerminal(updateStataTerminalFocus));
 
     // Sidebar panels
     datasetPanel = new DatasetPanel();
@@ -508,7 +530,8 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.languages.registerCompletionItemProvider(
             { language: 'stata' },
-            new StataCompletionProvider()
+            new StataCompletionProvider(() => datasetVariables),
+            '$', '`', '{',
         ),
         vscode.languages.registerHoverProvider(
             { language: 'stata' },

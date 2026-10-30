@@ -57,7 +57,7 @@ const type = (term, text) => term.handleInput(text);
 test('banner shows the real shortcut for running a line', () => {
     const { term, plain } = setup();
     assert.ok(plain().includes('Shift+Enter'));
-    assert.ok(!plain().includes('\u2318\u21A9'));
+    assert.ok(plain().includes(process.platform === 'darwin' ? '\u2318\u21A9' : 'Ctrl+Enter'));
     term.dispose();
 });
 
