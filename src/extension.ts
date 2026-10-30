@@ -324,8 +324,14 @@ function teardownConsole(term: vscode.Terminal): void {
     updateStataTerminalFocus();
 }
 
+/**
+ * Folder to `cd` into before running code from `doc`. By default none, like
+ * Stata's Do-file Editor; `stata.workingDirectory: fileDirectory` switches to
+ * the do-file's folder so relative paths resolve against it.
+ */
 function workingDirFor(doc: vscode.TextDocument): string | undefined {
-    return doc.uri.scheme === 'file' ? path.dirname(doc.fileName) : undefined;
+    const mode = vscode.workspace.getConfiguration('stata').get<string>('workingDirectory', 'unchanged');
+    return mode === 'fileDirectory' && doc.uri.scheme === 'file' ? path.dirname(doc.fileName) : undefined;
 }
 
 /** Send code to the console. The caller captures `target` before any await. */

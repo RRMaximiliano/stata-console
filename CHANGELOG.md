@@ -9,6 +9,7 @@
 - `Diagnose Stata Path Detection` now reports the backend, install directory, and Python version.
 
 ### Console
+- Running code no longer changes Stata's working directory, matching Stata's Do-file Editor (0.3.2 ran `cd` to the do-file's folder before every run). Set `stata.workingDirectory` to `fileDirectory` for the old behavior.
 - Syntax highlighting in the console, radian-style: echoed commands and the line you type are colored like the editor (Dark+/Light+, following the theme). Setting: `stata.console.syntaxHighlighting`.
 - Stata's `linesize` follows the console width, so long lines wrap less. Setting: `stata.console.matchTerminalWidth`.
 - Cleaner output: no stray `.` prompt lines or leaked internal commands, and one blank line between commands.

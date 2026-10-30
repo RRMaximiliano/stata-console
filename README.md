@@ -62,6 +62,7 @@ The Stata icon in the Activity Bar opens four panels:
 | `stata.pythonPath` | (auto-detect) | Python 3.8+ for the PyStata backend (64-bit on Windows). |
 | `stata.installDir` | (auto-detect) | Stata install directory containing `utilities/pystata`, e.g. `C:\Program Files\Stata19`. |
 | `stata.browseRowLimit` | 10000 | Max rows shown in the Data Viewer |
+| `stata.workingDirectory` | `unchanged` | `unchanged` leaves Stata's working directory alone, like Stata's Do-file Editor. `fileDirectory` changes to the do-file's folder before each run. The console starts in the workspace folder. |
 | `stata.console.syntaxHighlighting` | `true` | Syntax-highlight commands in the console |
 | `stata.console.matchTerminalWidth` | `true` | Set Stata's `linesize` to the console width (minimum 80) |
 | `stata.colors.prompt` | `#4E9A6A` | Color of the `. ` prompt (hex) |
