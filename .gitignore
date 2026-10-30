@@ -4,3 +4,5 @@ out/
 .claude/
 examples/*.png
 *.vsix
+__pycache__/
+*.pyc
