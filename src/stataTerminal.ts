@@ -158,7 +158,8 @@ export class StataTerminal implements vscode.Pseudoterminal {
     private lastFallbackMtime = 0;
     private lastBrowseCsv = '';
 
-    constructor(backend: StataBackend) {
+    /** `startDir`: Stata's initial working directory (default: the workspace folder). */
+    constructor(backend: StataBackend, private readonly startDir?: string) {
         this.backend = backend;
         cleanupStaleSessions();
         this.tempDir = createSessionDir();
@@ -247,7 +248,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
 
         this.startGraphWatcher();
 
-        const workspaceDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const workspaceDir = this.startDir ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         this.out(`${C.dim}${this.backend.label}${C.reset}\r\n`);
         if (this.backend.kind === 'pystata') {
             this.out(`${C.dim}Starting Stata…${C.reset}\r\n`);

@@ -183,19 +183,22 @@ async function applyStataDiagnostic(event: StataErrorEvent): Promise<void> {
 
 let consoleStarting: Promise<StataTerminal | undefined> | undefined;
 
-/** Open the console if needed. Concurrent callers share one startup and one terminal. */
-function ensureConsole(): Promise<StataTerminal | undefined> {
+/**
+ * Open the console if needed. Concurrent callers share one startup and one terminal.
+ * `startDir` is where a new Stata session starts (ignored if one is running).
+ */
+function ensureConsole(startDir?: string): Promise<StataTerminal | undefined> {
     if (terminal && stataTerminal) {
         terminal.show(true);
         return Promise.resolve(stataTerminal);
     }
     if (!consoleStarting) {
-        consoleStarting = createConsole().finally(() => { consoleStarting = undefined; });
+        consoleStarting = createConsole(startDir).finally(() => { consoleStarting = undefined; });
     }
     return consoleStarting;
 }
 
-async function createConsole(): Promise<StataTerminal | undefined> {
+async function createConsole(startDir?: string): Promise<StataTerminal | undefined> {
     const { backend, error } = await resolveBackend();
     if (!backend) {
         vscode.window.showErrorMessage(
@@ -212,7 +215,7 @@ async function createConsole(): Promise<StataTerminal | undefined> {
         return undefined;
     }
 
-    const session = new StataTerminal(backend);
+    const session = new StataTerminal(backend, startDir);
     stataTerminal = session;
 
     // Graph panel + plots list
@@ -334,11 +337,19 @@ function workingDirFor(doc: vscode.TextDocument): string | undefined {
     return mode === 'fileDirectory' && doc.uri.scheme === 'file' ? path.dirname(doc.fileName) : undefined;
 }
 
+/**
+ * Where a console opened by running `doc` starts: the do-file's folder, as when
+ * Stata is launched by opening a do-file. Otherwise the workspace folder.
+ */
+function startDirFor(doc: vscode.TextDocument): string | undefined {
+    return doc.uri.scheme === 'file' ? path.dirname(doc.fileName) : undefined;
+}
+
 /** Send code to the console. The caller captures `target` before any await. */
 function runCode(editor: vscode.TextEditor, code: string, target: RunTarget): void {
     if (code.trim() === '') { return; }
     const workingDir = workingDirFor(editor.document);
-    void ensureConsole().then((session) => session?.sendCode(code, workingDir, target));
+    void ensureConsole(startDirFor(editor.document)).then((session) => session?.sendCode(code, workingDir, target));
 }
 
 function runWholeFile(editor: vscode.TextEditor): void {
@@ -352,7 +363,7 @@ function runWholeFile(editor: vscode.TextEditor): void {
     }
     // Run the saved text rather than `do "file"`, so browse and every graph
     // in the file are handled like a selection.
-    void doc.save().then(() => ensureConsole()).then((session) => {
+    void doc.save().then(() => ensureConsole(startDirFor(doc))).then((session) => {
         session?.sendCode(doc.getText(), workingDir, target);
     });
 }

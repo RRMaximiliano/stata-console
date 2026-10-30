@@ -353,7 +353,7 @@
             "Leave Stata's working directory alone, like Stata's own Do-file Editor. Use cd or globals in your do-files to set paths.",
             "Before each run, cd to the folder of the do-file being run, so relative paths resolve against it. The change persists in the session."
           ],
-          "description": "Working directory used when running code from the editor. The console starts in the workspace folder."
+          "description": "Working directory used when running code from the editor. A console opened by running a do-file starts in that file's folder (as when Stata is launched by opening a do-file); one opened otherwise starts in the workspace folder."
         },
         "stata.browseRowLimit": {
           "type": "number",
