@@ -14,19 +14,19 @@ The current design is inspired by [Positron](https://positron.posit.co/) and how
 Right now, the extension does the following:
 
 - **Console.** A pseudoterminal wraps Stata's command-line interface. You type commands, see output, and interact with Stata without leaving VS Code. The output is color-coded: commands in blue, errors in red, table separators in gray.
-- **Run code from the editor.** Select lines in a `.do` file and press `Cmd+Shift+D` to execute them. `Cmd+Enter` runs the current line and advances the cursor. Right-click for context menu options. The extension writes your code to a temporary do-file and runs it, so comments (`//`, `///`, `/* */`) work correctly.
-- **Data Viewer.** Type `browse` in the console or include it in a do-file. Instead of failing (as it normally does in console mode), the extension exports the data to CSV and displays it in a spreadsheet-like panel with sortable columns, row numbers, search filtering, and a row count. Supports `browse varlist if condition in range` syntax. However, if you use dofiles within dofiles, the browse command won't work. I don't know how to fix it yet. So, just remove `browse` if you are running, for example, a `00_main.do`
+- **Run code from the editor.** Select lines in a `.do` file and press `Cmd+Shift+D` (`Ctrl+Shift+D` on Windows/Linux) to execute them. `Cmd+Enter` (`Ctrl+Enter`) or `Shift+Enter` runs the current line and advances the cursor. Right-click for context menu options. The extension writes your code to a temporary do-file and runs it, so comments (`//`, `///`, `/* */`) work correctly.
+- **Data Viewer.** Type `browse` in the console or include it in a do-file. Instead of failing (as it normally does in console mode), the extension exports the data to CSV and displays it in a spreadsheet-like panel with sortable columns, row numbers, search filtering, and a row count. Supports `browse varlist if condition in range` syntax. Only the first `stata.browseRowLimit` rows are exported, and the viewer shows the true total. However, if you use dofiles within dofiles, the browse command won't work. I don't know how to fix it yet. So, just remove `browse` if you are running, for example, a `00_main.do`
 - **Variables panel.** Shows every variable in the loaded dataset with its name, type, and label. Click a variable to insert its name at the cursor. Auto-refreshes after each code execution.
 - **Dataset info.** Displays the filename, observation count, variable count, and data label. The status bar also shows this at a glance.
-- **Stored results.** After running a regression or estimation command, the panel shows `e()` scalars (N, R-squared, F-statistic, etc.) and macros (command name, dependent variable, etc.). Updates automatically.
+- **Stored results.** After running a regression or estimation command, the panel shows `e()` scalars (N, R-squared, F-statistic, etc.) and macros (command name, dependent variable, etc.), plus `r()` scalars and macros from r-class commands such as `summarize`. Click a value to copy it. Updates automatically.
 - **Plots.** Every graph command (`scatter`, `histogram`, `twoway`, `graph bar`, etc.) is captured and displayed in a side panel. Multiple plots are preserved in a navigable history with back/forward buttons and a save option. A plots list in the sidebar shows all generated plots with timestamps. You can also remove the plots if you don't want them to be kept in the side panel.
 - **Syntax highlighting.** Full TextMate grammar for `.do`, `.ado`, `.mata`, and `.sthlp` files covering commands, comments, strings, macros, numbers, operators, and control flow.
 - **Auto-completion.** Over 120 Stata commands with descriptions — data management, estimation, post-estimation, graphics, programming, and more. Type `reg` and see `regress — Linear regression (OLS)`.
 - **Snippets.** 19 templates for common patterns: `foreach`, `forvalues`, `program...end`, `reghdfe`, `merge`, `collapse`, `twoway` graph, do-file header with date and project paths, `preserve...restore`, and others. Type the prefix and press Tab.
 - **Hover help.** Hover over any Stata command to see a brief description.
-- **Outline.** The Outline panel (`Cmd+Shift+O`) shows the structure of your do-file: section headers, program definitions, and loops. Section detection works with common Stata conventions — numbered sections (`* 1. Title`), separator-bordered sections (`* --- Title ---`), and ALL CAPS headers.
-- **Go to definition.** `Cmd+Click` on a program name to jump to its `program define` in the same file.
-- **File links.** Paths in `do`, `run`, `use`, `save`, `import using`, `graph export`, and similar commands are clickable — `Cmd+Click` to open the referenced file. I haven not tested this with globals. 
+- **Outline.** The Outline panel (`Cmd+Shift+O`) shows the structure of your do-file: section headers, program definitions, and loops. Section detection works with common Stata conventions — numbered sections (`* 1. Title`), separator-bordered sections (`* --- Title ---`), ALL CAPS headers, and `**#` bookmarks.
+- **Go to definition.** `Cmd+Click` on a program name to jump to its `program define`, in the same file or in other `.do`/`.ado` files in the workspace.
+- **File links.** Paths in `do`, `run`, `use`, `save`, `import using`, `graph export`, and similar commands are clickable — `Cmd+Click` to open the referenced file. Globals defined in the same file (`$root/data/x.dta`), preceding `cd` commands, Windows paths, and implicit extensions (`use auto` → `auto.dta`) are resolved.
 - **Error diagnostics.** When Stata returns an error, the offending line in the editor gets a red underline with the error message. Cleared on the next run.
 - **Path diagnostics.** Run `Stata: Diagnose Stata Path Detection` from the Command Palette to see exactly which executable was selected, what was found on `PATH`, and which install candidates were discovered on disk.
 
@@ -35,13 +35,13 @@ Right now, the extension does the following:
 | Shortcut | Action |
 |----------|--------|
 | `Cmd+Shift+D` | Run do-file or selection |
-| `Shift+Enter` | Run current line and advance cursor |
-| `Cmd+L` | Clear console |
+| `Cmd+Enter` or `Shift+Enter` | Run current line and advance cursor |
+| `Cmd+L` | Clear console (when the Stata console has focus) |
 | `Ctrl+C` | Interrupt execution |
 | `Cmd+/` | Toggle line comments |
 | `Cmd+Shift+O` | Open outline |
 
-All shortcuts can be customized via `Cmd+K Cmd+S` (Keyboard Shortcuts).
+On Windows and Linux, use `Ctrl` in place of `Cmd`. All shortcuts can be customized via `Cmd+K Cmd+S` (Keyboard Shortcuts).
 
 ## Sidebar panels
 
@@ -58,6 +58,9 @@ The Stata icon in the Activity Bar opens four panels:
 |---------|---------|-------------|
 | `stata.stataPath` | (auto-detect) | Full path to the Stata executable. On macOS you can also point it at a `Stata*.app` bundle or its `Contents/MacOS` folder. |
 | `stata.stataEdition` | MP | Preferred edition: MP, SE, or BE |
+| `stata.backend` | `auto` | `auto` uses PyStata on Windows and the console binary on macOS/Linux. Set `pystata` or `console` to force one. |
+| `stata.pythonPath` | (auto-detect) | Python 3.8+ for the PyStata backend (64-bit on Windows). |
+| `stata.installDir` | (auto-detect) | Stata install directory containing `utilities/pystata`, e.g. `C:\Program Files\Stata19`. |
 | `stata.browseRowLimit` | 10000 | Max rows shown in the Data Viewer |
 | `stata.colors.prompt` | `#4E9A6A` | Color of the `. ` prompt (hex) |
 | `stata.colors.command` | `#569CD6` | Color of echoed commands (hex) |
@@ -65,11 +68,16 @@ The Stata icon in the Activity Bar opens four panels:
 | `stata.colors.tableSeparator` | `#B4B4B4` | Color of table separator lines (hex) |
 | `stata.colors.dim` | `#787878` | Color of dimmed/info text (hex) |
 
-Auto-detection now checks your shell `PATH` first, then common install locations. On macOS it also scans standard app bundles and falls back to Spotlight (`mdfind`) so renamed or relocated installs are more likely to be found. Console colors take effect when the Stata console is opened or restarted.
+Auto-detection now checks your shell `PATH` first, then common install locations. On macOS it also scans standard app bundles and falls back to Spotlight (`mdfind`) so renamed or relocated installs are more likely to be found. On Windows it looks in `Program Files` for `Stata19`, `StataNow19`, and older versions. Console colors take effect when the Stata console is opened or restarted.
 
 ## How it works
 
-The extension spawns Stata in console mode (`stata-mp -q`) as a child process with piped stdin/stdout. User code is written to temporary do-files and executed via Stata's `do` command, preserving full comment and continuation syntax.
+The extension runs Stata through one of two backends:
+
+- **Console** (macOS/Linux default). Spawns Stata in console mode (`stata-mp -q`) with piped stdin/stdout.
+- **PyStata** (Windows default; Stata 17+). Windows Stata has no console mode, so the extension starts Python with a small bridge script (`python/stata_bridge.py`) that drives Stata through [PyStata](https://www.stata.com/python/pystata/), the Python integration that ships with Stata 17 and later.
+
+Either way, user code is written to temporary do-files and executed via Stata's `do` command, preserving full comment and continuation syntax. Each batch ends with a completion marker, so the extension knows exactly when Stata has finished.
 
 After each execution, a silent post-processing step runs via Stata's `run` command (which produces zero output). This extracts variable metadata, dataset info, estimation results, and captures graphs — all without any visible terminal noise.
 
@@ -83,8 +91,9 @@ Right now, this extension is slower than regular Stata. That's it, that's the me
 
 - **`browse` in nested do-files.** When a do-file calls `do "other.do"`, the extension cannot intercept `browse` inside the nested file because Stata reads it directly from disk. Use `browse` interactively or in directly-run code.
 - **Graphs from nested do-files.** Only the last graph from a nested `do` call is captured (via the post-execution fallback). Directly-run code captures every graph.
-- **Stored results.** Only `e()` scalars and macros are shown. `r()` return values are not currently captured.
-- **Go to definition.** Works within the current file only.
+- **Graphs in loops.** A graph command inside a loop is captured once, from the last iteration.
+- **PyStata backend.** Requires Stata 17 or later and Python 3.8+. Stata cannot open an interactive `mata` or `python` prompt there; use `mata:`/`python:` one-liners or blocks ending in `end`.
+- **Windows.** Supported through the PyStata backend, but less tested than macOS. Please report issues, and include the output of `Stata: Diagnose Stata Path Detection`.
 
 ## Installation
 
@@ -94,7 +103,7 @@ Search for "Stata Console" in the VS Code Extensions panel (`Cmd+Shift+X`), or v
 **From a `.vsix` file:**
 Download the latest `.vsix` from [GitHub Releases](https://github.com/RRMaximiliano/stata-console/releases), then run:
 ``` 
-code --install-extension stata-console-0.3.2.vsix
+code --install-extension stata-console-0.4.0.vsix
 ```
 
 **From source:**
@@ -108,13 +117,17 @@ Then open the folder in VS Code and press `F5` to launch the Extension Developme
 
 ## Requirements
 
-- **macOS or Linux** with a Stata console executable available. Windows is not currently supported because Stata there does not expose the same console stdin/stdout interface this extension relies on.
-- Stata 14 or later (MP, SE, or BE) installed on your system
+- **macOS or Linux:** Stata 14 or later (MP, SE, or BE) with its console executable (`stata-mp`, `stata-se`, `stata`).
+- **Windows:** Stata 17 or later, plus 64-bit Python 3.8+ (from python.org, the Microsoft Store, conda, or the VS Code Python extension's selected interpreter). No extra Python packages are needed.
 - VS Code 1.80.0 or later
 
 ### macOS note
 
 If auto-detect misses a valid install on macOS, the usual cause is that the shell utility symlink was never installed or is stale after moving the app bundle. Open the Stata GUI and choose `Stata > Install Terminal Utility...`, or set `stata.stataPath` explicitly to a bundle executable such as `/Applications/Stata/StataMP.app/Contents/MacOS/stata-mp`.
+
+### Windows note
+
+If Stata isn't found, set `stata.installDir` to the folder that contains `StataMP-64.exe` and `utilities\pystata`, for example `C:\Program Files\Stata19`. If Python isn't found, set `stata.pythonPath` to your `python.exe`. Run `Stata: Diagnose Stata Path Detection` to see what was detected.
 
 ## Acknowledgments
 
