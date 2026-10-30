@@ -7,6 +7,8 @@
 
 This extension embeds an interactive Stata session directly inside Visual Studio Code. Instead of switching between VS Code and Stata's GUI, you get a terminal, data viewer, variables panel, plots pane, and stored results inspector all within the editor.
 
+![The Stata console in VS Code, with syntax-highlighted commands and Stata output](resources/console.png)
+
 The current design is inspired by [Positron](https://positron.posit.co/) and how it integrates R into the IDE, i.e., a unified workspace where the console, environment, data viewer, and plots live alongside your code.
 
 ## What it does
@@ -108,6 +110,8 @@ Download the latest `.vsix` from [GitHub Releases](https://github.com/RRMaximili
 ``` 
 code --install-extension stata-console-0.4.0.vsix
 ```
+
+**Examples:** the [`examples/`](examples) folder has do-files that exercise each feature (data, regressions, graphs, programming, errors, outline) using Stata's built-in datasets.
 
 **From source:**
 ```
