@@ -190,17 +190,22 @@
           "command": "stata.previewSthlp",
           "when": "resourceExtname == .sthlp",
           "group": "navigation"
+        },
+        {
+          "command": "stata.runFile",
+          "when": "editorLangId == stata && resourceExtname != .sthlp",
+          "group": "navigation@1"
         }
       ],
       "editor/context": [
         {
           "command": "stata.runSelection",
-          "when": "editorTextFocus && resourceExtname =~ /\\.(do|ado|mata)$/",
+          "when": "editorLangId == stata && resourceExtname != .sthlp",
           "group": "stata@1"
         },
         {
           "command": "stata.run",
-          "when": "editorTextFocus && resourceExtname =~ /\\.(do|ado|mata)$/",
+          "when": "editorLangId == stata && resourceExtname != .sthlp",
           "group": "stata@2"
         }
       ]
@@ -208,21 +213,26 @@
     "keybindings": [
       {
         "command": "stata.run",
-        "key": "ctrl+shift+d",
-        "mac": "cmd+shift+d",
-        "when": "editorTextFocus && resourceExtname =~ /\\.(do|ado|mata)$/"
+        "key": "ctrl+k ctrl+enter",
+        "mac": "cmd+k cmd+enter",
+        "when": "editorTextFocus && editorLangId == stata && resourceExtname != .sthlp"
+      },
+      {
+        "command": "stata.runSelection",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && editorLangId == stata && resourceExtname != .sthlp"
       },
       {
         "command": "stata.runSelection",
         "key": "shift+enter",
-        "mac": "shift+enter",
-        "when": "editorTextFocus && editorLangId == stata"
+        "when": "editorTextFocus && editorLangId == stata && resourceExtname != .sthlp"
       },
       {
         "command": "stata.clearConsole",
-        "key": "ctrl+l",
-        "mac": "cmd+l",
-        "when": "terminalFocus"
+        "key": "ctrl+k ctrl+l",
+        "mac": "cmd+k cmd+l",
+        "when": "terminalFocus && stata.consoleActive"
       },
       {
         "command": "stata.previewSthlp",

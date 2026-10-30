@@ -3,30 +3,196 @@
   "name": "Stata",
   "scopeName": "source.stata",
   "patterns": [
+    { "include": "#semicolon" },
+    { "include": "#directives" },
+    { "include": "#mata" },
     { "include": "#comments" },
     { "include": "#strings" },
     { "include": "#macros" },
     { "include": "#numbers" },
+    { "include": "#functions" },
     { "include": "#control" },
     { "include": "#keywords" },
     { "include": "#commands" },
     { "include": "#operators" }
   ],
   "repository": {
-    "comments": {
+    "slash-comments": {
       "patterns": [
         {
-          "name": "comment.block.stata",
-          "begin": "/\\*",
-          "end": "\\*/"
+          "name": "comment.line.triple-slash.stata",
+          "match": "(?<!\\S)///.*$"
         },
         {
           "name": "comment.line.double-slash.stata",
+          "match": "(?<!\\S)//(?!/).*$"
+        }
+      ]
+    },
+    "semicolon": {
+      "name": "meta.delimited.stata",
+      "begin": "^\\s*(#delimit)\\s+(;)\\s*(?://.*)?$",
+      "beginCaptures": {
+        "0": {
+          "name": "meta.preprocessor.stata"
+        }
+      },
+      "end": "^\\s*(#delimit)\\s+(cr)\\b.*$",
+      "endCaptures": {
+        "0": {
+          "name": "meta.preprocessor.stata"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#block-comment"
+        },
+        {
+          "include": "#slash-comments"
+        },
+        {
+          "name": "comment.line.star.stata",
+          "begin": "\\*",
+          "end": ";"
+        },
+        {
+          "name": "meta.statement.stata",
+          "begin": "(?=\\S)",
+          "end": ";",
+          "patterns": [
+            {
+              "include": "#block-comment"
+            },
+            {
+              "include": "#slash-comments"
+            },
+            {
+              "include": "#strings"
+            },
+            {
+              "include": "#macros"
+            },
+            {
+              "include": "#numbers"
+            },
+            {
+              "include": "#functions"
+            },
+            {
+              "include": "#control"
+            },
+            {
+              "include": "#keywords"
+            },
+            {
+              "include": "#commands"
+            },
+            {
+              "include": "#operators"
+            }
+          ]
+        }
+      ]
+    },
+    "block-comment": {
+      "name": "comment.block.stata",
+      "begin": "/\\*",
+      "end": "\\*/",
+      "patterns": [
+        {
+          "include": "#block-comment"
+        }
+      ]
+    },
+    "compound-string": {
+      "name": "string.quoted.compound.stata",
+      "begin": "`\"",
+      "end": "\"'",
+      "patterns": [
+        {
+          "include": "#compound-string"
+        },
+        {
+          "include": "#macros"
+        }
+      ]
+    },
+    "directives": {
+      "patterns": [
+        {
+          "name": "meta.preprocessor.stata",
+          "match": "^\\s*#delimit\\s+(?:;|cr)\\s*$"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "support.function.string.stata",
+          "match": "\\b(?:str(?:len|lower|upper|trim|itrim|rtrim|ltrim|pos|rpos|reverse|match|toname)|substr|subinstr|subinword|regexm|regexr|regexs|ustr\\w+|real|string|strofreal|char|uchar|word|wordcount|trim|lower|upper|length|strpos|inlist|inrange|missing|cond)(?=\\s*\\()"
+        }
+      ]
+    },
+    "mata": {
+      "name": "meta.embedded.block.mata",
+      "begin": "^\\s*(mata)\\s*:?\\s*(?://.*)?$",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.stata"
+        }
+      },
+      "end": "^\\s*(end)\\b",
+      "endCaptures": {
+        "1": {
+          "name": "keyword.control.stata"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#block-comment"
+        },
+        {
+          "name": "comment.line.double-slash.mata",
           "match": "//.*$"
         },
         {
+          "include": "#strings"
+        },
+        {
+          "include": "#macros"
+        },
+        {
+          "include": "#numbers"
+        },
+        {
+          "name": "storage.type.mata",
+          "match": "\\b(?:real|complex|string|scalar|vector|matrix|rowvector|colvector|void|struct|pointer|transmorphic|external)\\b"
+        },
+        {
+          "name": "keyword.control.mata",
+          "match": "\\b(?:if|else|for|while|do|break|continue|return)\\b"
+        },
+        {
+          "name": "support.function.mata",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*(?=\\s*\\()"
+        },
+        {
+          "include": "#operators"
+        }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        {
+          "include": "#block-comment"
+        },
+        {
           "name": "comment.line.triple-slash.stata",
-          "match": "///.*$"
+          "match": "(?<!\\S)///.*$"
+        },
+        {
+          "name": "comment.line.double-slash.stata",
+          "match": "(?<!\\S)//(?!/).*$"
         },
         {
           "name": "comment.line.star.stata",
@@ -37,14 +203,17 @@
     "strings": {
       "patterns": [
         {
-          "name": "string.quoted.compound.stata",
-          "begin": "`\"",
-          "end": "\"'"
+          "include": "#compound-string"
         },
         {
           "name": "string.quoted.double.stata",
           "begin": "\"",
-          "end": "\""
+          "end": "\"|$",
+          "patterns": [
+            {
+              "include": "#macros"
+            }
+          ]
         }
       ]
     },
@@ -52,15 +221,17 @@
       "patterns": [
         {
           "name": "variable.other.local.stata",
-          "match": "`[a-zA-Z_][a-zA-Z0-9_]*'"
-        },
-        {
-          "name": "variable.other.local.stata",
-          "match": "`[^']*'"
+          "begin": "`(?!\")",
+          "end": "'|$",
+          "patterns": [
+            {
+              "include": "#macros"
+            }
+          ]
         },
         {
           "name": "variable.other.global.stata",
-          "match": "\\$\\{?[a-zA-Z_][a-zA-Z0-9_]*\\}?"
+          "match": "\\$\\{[a-zA-Z_][a-zA-Z0-9_]*\\}|\\$[a-zA-Z_][a-zA-Z0-9_]*"
         }
       ]
     },
@@ -68,11 +239,11 @@
       "patterns": [
         {
           "name": "constant.numeric.stata",
-          "match": "\\b[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?\\b"
+          "match": "(?<![\\w.])(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?!\\w)"
         },
         {
           "name": "constant.language.missing.stata",
-          "match": "\\b\\.[a-z]?\\b"
+          "match": "(?<![\\w.])\\.[a-z]?(?!\\w)"
         }
       ]
     },
@@ -88,7 +259,7 @@
       "patterns": [
         {
           "name": "keyword.other.stata",
-          "match": "\\b(using|replace|clear|all|varlist|newlist|string|numeric|integer|matrix|scalar|var|by|bysort|sort|xi|svy|mi|st|xt|me|sem|gsem|bayesmh)\\b"
+          "match": "\\b(using|replace|clear|all|varlist|newlist|string|numeric|integer|matrix|scalar|var|by|bys|bysort|sort|xi|svy|mi|st|xt|me|sem|gsem|bayesmh)\\b"
         },
         {
           "name": "support.type.stata",
@@ -108,11 +279,11 @@
         },
         {
           "name": "support.function.statistics.stata",
-          "match": "\\b(regress|reg|logit|logistic|probit|ologit|oprobit|mlogit|poisson|nbreg|tobit|truncreg|heckman|ivregress|ivreg2|xtreg|xtivreg|xtlogit|xtpoisson|areg|reghdfe|didregress|diff_in_diff|rdrobust|synth|binscatter|lpoly|lowess|qreg|rreg|sureg|sem|gsem|mixed|melogit|bayesmh|bayes|bootstrap|jackknife|permute|simulate|power|sampsi)\\b"
+          "match": "\\b(regress|reg|logit|logistic|probit|ologit|oprobit|mlogit|poisson|nbreg|tobit|truncreg|heckman|ivregress|ivreg2|xtreg|xtivreg|xtlogit|xtpoisson|areg|reghdfe|ivreghdfe|didregress|diff_in_diff|rdrobust|synth|binscatter|lpoly|lowess|qreg|rreg|sureg|sem|gsem|mixed|melogit|bayesmh|bayes|bootstrap|jackknife|permute|simulate|power|sampsi)\\b"
         },
         {
           "name": "support.function.descriptive.stata",
-          "match": "\\b(summarize|sum|tabulate|tab|table|describe|des|codebook|inspect|list|browse|br|edit|ed|display|di|correlate|cor|pwcorr|mean|proportion|ratio|total|ci|centile|pctile|xtile|histogram|kdensity|stem|symplot|qnorm|pnorm|gladder|ladder)\\b"
+          "match": "\\b(summarize|su|sum|tabulate|tab|table|describe|des|codebook|inspect|list|browse|br|edit|ed|display|di|correlate|cor|pwcorr|mean|proportion|ratio|total|ci|centile|pctile|xtile|histogram|kdensity|stem|symplot|qnorm|pnorm|gladder|ladder)\\b"
         },
         {
           "name": "support.function.testing.stata",
@@ -124,27 +295,31 @@
         },
         {
           "name": "support.function.io.stata",
-          "match": "\\b(sysuse|webuse|bcuse|freduse|wbopendata|cd|dir|ls|copy|erase|mkdir|rmdir|type|cat|file|filefilter|log|cmdlog|translate|set|query|adopath|ssc|net|ado|which|findfile|mata)\\b"
+          "match": "\\b(do|run|include|sysuse|webuse|bcuse|freduse|wbopendata|cd|dir|ls|copy|erase|mkdir|rmdir|type|cat|file|filefilter|log|cmdlog|translate|set|query|adopath|ssc|net|ado|which|findfile|mata)\\b"
         },
         {
           "name": "support.function.estimation.stata",
-          "match": "\\b(eststo|esttab|estout|estimates|ereturn|return|matrix|scalar|constraint|ml|gmm|nlsur|frontier|stcox|streg|stset|stdes|stsum|sts|stcurve|stpower|ltable|ctset|snapshot)\\b"
+          "match": "\\b(eststo|esttab|estout|estadd|outreg2|ftools|gtools|gcollapse|gstats|estimates|ereturn|return|matrix|scalar|constraint|ml|gmm|nlsur|frontier|stcox|streg|stset|stdes|stsum|sts|stcurve|stpower|ltable|ctset|snapshot)\\b"
         }
       ]
     },
     "operators": {
       "patterns": [
         {
+          "name": "keyword.operator.factor.stata",
+          "match": "\\b(?:i|c|o|b|bn|ibn|ib[0-9]+|ib\\((?:first|last|freq|[0-9]+)\\))\\.|##?"
+        },
+        {
           "name": "keyword.operator.comparison.stata",
-          "match": "(==|!=|>=|<=|>|<)"
+          "match": "==|!=|~=|>=|<=|>|<"
         },
         {
           "name": "keyword.operator.logical.stata",
-          "match": "\\b(\\&|\\||!)\\b|&&|\\|\\|"
+          "match": "&{1,2}|\\|{1,2}|!|~"
         },
         {
           "name": "keyword.operator.arithmetic.stata",
-          "match": "(\\+|-|\\*|/|\\^)"
+          "match": "\\+|-|\\*|/|\\^"
         },
         {
           "name": "keyword.operator.assignment.stata",
