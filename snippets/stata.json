@@ -136,7 +136,7 @@
       "set more off",
       "",
       "* Paths",
-      "global root \"${4:~/project}\"",
+      "global root \"${4:${TM_DIRECTORY}}\"",
       "global data  \"\\$root/data\"",
       "global output \"\\$root/output\"",
       "",

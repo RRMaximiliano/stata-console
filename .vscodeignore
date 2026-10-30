@@ -5,8 +5,11 @@
 eslint.config.mjs
 src/**
 test/**
-test-scripts/**
+examples/**
 tsconfig.json
 package-lock.json
 *.vsix
 **/*.map
+# Ship python/stata_bridge.py; only generated Python cache files are excluded.
+python/**/__pycache__/**
+python/**/*.pyc

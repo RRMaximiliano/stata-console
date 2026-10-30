@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
+import { crossPlatformBasename } from './htmlUtils';
 
 interface DatasetInfo {
     key: string;
     value: string;
     icon: string;
+    tooltip?: string;
     command?: vscode.Command;
 }
 
@@ -13,45 +15,61 @@ export class DatasetPanel implements vscode.TreeDataProvider<DatasetInfo> {
 
     private items: DatasetInfo[] = [];
 
+    constructor() {
+        this.items = this.createEmptyState();
+    }
+
+    private createEmptyState(): DatasetInfo[] {
+        return [{
+            key: 'No data in memory',
+            value: '',
+            icon: 'database',
+            tooltip: 'Load a dataset in Stata (e.g. sysuse or use) to inspect dataset metadata here',
+        }];
+    }
+
     update(meta?: { obs: number; vars: number; filename: string; label: string }): void {
-        if (!meta || (meta.obs === 0 && meta.vars === 0)) {
-            this.items = [{
-                key: 'No data in memory',
-                value: '',
-                icon: 'info',
-            }];
+        const obs = meta && Number.isFinite(meta.obs) && meta.obs > 0 ? Math.floor(meta.obs) : 0;
+        const vars = meta && Number.isFinite(meta.vars) && meta.vars > 0 ? Math.floor(meta.vars) : 0;
+
+        if (!meta || (obs === 0 && vars === 0)) {
+            this.items = this.createEmptyState();
             this._onDidChangeTreeData.fire();
             return;
         }
 
-        const name = meta.filename
-            ? meta.filename.replace(/^.*[/\\]/, '')
-            : '(unsaved)';
+        const rawFilename = (meta.filename || '').trim();
+        const name = rawFilename ? crossPlatformBasename(rawFilename) : '(unsaved)';
 
         this.items = [
             {
                 key: 'Dataset',
                 value: name,
                 icon: 'database',
+                tooltip: rawFilename ? `${rawFilename}\nClick to browse data` : 'Unsaved dataset in memory \u2014 click to browse data',
                 command: { command: 'stata.browse', title: 'Browse Data' },
             },
             {
                 key: 'Observations',
-                value: meta.obs.toLocaleString(),
+                value: obs.toLocaleString(),
                 icon: 'list-ordered',
+                tooltip: `${obs.toLocaleString()} observations`,
             },
             {
                 key: 'Variables',
-                value: meta.vars.toString(),
+                value: vars.toLocaleString(),
                 icon: 'symbol-field',
+                tooltip: `${vars.toLocaleString()} variables`,
             },
         ];
 
-        if (meta.label) {
+        const cleanLabel = (meta.label || '').trim();
+        if (cleanLabel) {
             this.items.push({
                 key: 'Label',
-                value: meta.label,
+                value: cleanLabel,
                 icon: 'tag',
+                tooltip: cleanLabel,
             });
         }
 
@@ -62,9 +80,11 @@ export class DatasetPanel implements vscode.TreeDataProvider<DatasetInfo> {
         const item = new vscode.TreeItem(element.key, vscode.TreeItemCollapsibleState.None);
         item.description = element.value;
         item.iconPath = new vscode.ThemeIcon(element.icon);
+        if (element.tooltip) {
+            item.tooltip = element.tooltip;
+        }
         if (element.command) {
             item.command = element.command;
-            item.tooltip = 'Click to browse data';
         }
         return item;
     }

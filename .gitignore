@@ -2,5 +2,5 @@ node_modules/
 out/
 .DS_Store
 .claude/
-test-scripts/
+examples/*.png
 *.vsix

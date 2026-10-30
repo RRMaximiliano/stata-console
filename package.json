@@ -2,7 +2,7 @@
   "name": "stata-console",
   "displayName": "Stata Console",
   "description": "Interactive Stata console embedded in VS Code — terminal, data viewer, variables panel, plots",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "publisher": "rrmaximiliano",
   "license": "MIT",
   "repository": {
@@ -154,6 +154,18 @@
         "enablement": "stata.consoleActive"
       },
       {
+        "command": "stata.deletePlot",
+        "title": "Delete Plot",
+        "category": "Stata",
+        "icon": "$(close)"
+      },
+      {
+        "command": "stata._variablesFilterSort",
+        "title": "Filter or Sort Variables",
+        "category": "Stata",
+        "icon": "$(filter)"
+      },
+      {
         "command": "stata.refreshVariables",
         "title": "Refresh Variables",
         "category": "Stata",
@@ -168,7 +180,29 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "stata.deletePlot",
+          "when": "false"
+        },
+        {
+          "command": "stata._variablesFilterSort",
+          "when": "false"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "stata.deletePlot",
+          "when": "view == stataPlotsList && viewItem == stataPlotItem",
+          "group": "inline"
+        }
+      ],
       "view/title": [
+        {
+          "command": "stata._variablesFilterSort",
+          "when": "view == stataVariables",
+          "group": "navigation@0"
+        },
         {
           "command": "stata.refreshVariables",
           "when": "view == stataVariables",
@@ -190,17 +224,22 @@
           "command": "stata.previewSthlp",
           "when": "resourceExtname == .sthlp",
           "group": "navigation"
+        },
+        {
+          "command": "stata.runFile",
+          "when": "editorLangId == stata && resourceExtname != .sthlp",
+          "group": "navigation@1"
         }
       ],
       "editor/context": [
         {
           "command": "stata.runSelection",
-          "when": "editorTextFocus && resourceExtname =~ /\\.(do|ado|mata)$/",
+          "when": "editorLangId == stata && resourceExtname != .sthlp",
           "group": "stata@1"
         },
         {
           "command": "stata.run",
-          "when": "editorTextFocus && resourceExtname =~ /\\.(do|ado|mata)$/",
+          "when": "editorLangId == stata && resourceExtname != .sthlp",
           "group": "stata@2"
         }
       ]
@@ -210,19 +249,24 @@
         "command": "stata.run",
         "key": "ctrl+shift+d",
         "mac": "cmd+shift+d",
-        "when": "editorTextFocus && resourceExtname =~ /\\.(do|ado|mata)$/"
+        "when": "editorTextFocus && editorLangId == stata && resourceExtname != .sthlp"
+      },
+      {
+        "command": "stata.runSelection",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && editorLangId == stata && resourceExtname != .sthlp"
       },
       {
         "command": "stata.runSelection",
         "key": "shift+enter",
-        "mac": "shift+enter",
-        "when": "editorTextFocus && editorLangId == stata"
+        "when": "editorTextFocus && editorLangId == stata && resourceExtname != .sthlp"
       },
       {
         "command": "stata.clearConsole",
         "key": "ctrl+l",
         "mac": "cmd+l",
-        "when": "terminalFocus"
+        "when": "terminalFocus && stata.terminalFocused"
       },
       {
         "command": "stata.previewSthlp",
@@ -250,6 +294,27 @@
     "configuration": {
       "title": "Stata Console",
       "properties": {
+        "stata.backend": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "console", "pystata"],
+          "enumDescriptions": [
+            "Use PyStata on Windows and the console binary on macOS/Linux.",
+            "Use the Stata console binary (macOS/Linux only).",
+            "Use Python and PyStata (Stata 17+ and Python 3.8+ required)."
+          ],
+          "description": "Backend for new Stata console sessions. Restart the Stata console after changing this setting."
+        },
+        "stata.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python executable for PyStata, without arguments (paths containing spaces are supported). Requires Python 3.8+ and 64-bit Python on Windows. Leave empty to use the VS Code Python extension's active environment, then py -3 on Windows or python3/python on PATH."
+        },
+        "stata.installDir": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Stata 17+ installation directory containing utilities/pystata, for example C:\\Program Files\\Stata19 or /Applications/StataNow. Leave empty to infer it from the Stata executable."
+        },
         "stata.stataPath": {
           "type": "string",
           "default": "",
@@ -269,6 +334,26 @@
             "Stata/BE — Basic Edition"
           ],
           "description": "Which Stata edition to use. Auto-detection will prefer this edition."
+        },
+        "stata.console.syntaxHighlighting": {
+          "type": "boolean",
+          "default": true,
+          "description": "Syntax-highlight commands in the Stata console (echoed commands and the line you type), using colors that follow the light or dark theme."
+        },
+        "stata.console.matchTerminalWidth": {
+          "type": "boolean",
+          "default": true,
+          "description": "Set Stata's line width (set linesize) to the console width, so long commands and output wrap less. Minimum 80."
+        },
+        "stata.workingDirectory": {
+          "type": "string",
+          "default": "unchanged",
+          "enum": ["unchanged", "fileDirectory"],
+          "enumDescriptions": [
+            "Leave Stata's working directory alone, like Stata's own Do-file Editor. Use cd or globals in your do-files to set paths.",
+            "Before each run, cd to the folder of the do-file being run, so relative paths resolve against it. The change persists in the session."
+          ],
+          "description": "Working directory used when running code from the editor. A console opened by running a do-file starts in that file's folder (as when Stata is launched by opening a do-file); one opened otherwise starts in the workspace folder."
         },
         "stata.browseRowLimit": {
           "type": "number",
