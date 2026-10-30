@@ -10,6 +10,8 @@ import {
     resolveStataPath,
     resolveConfiguredPath,
 } from './stataPathResolver';
+import type { StataBackend } from './backend';
+import { ConsoleBackend } from './stataProcess';
 
 function createResolverEnvironment(): ResolverEnvironment {
     return {
@@ -80,4 +82,22 @@ export function getStataPathDiagnostics(): StataPathDiagnostics {
         config.get<string>('stataEdition', 'MP'),
         createResolverEnvironment(),
     );
+}
+
+export interface BackendResolution {
+    backend?: StataBackend;
+    /** User-facing explanation when no backend could be created. */
+    error?: string;
+}
+
+/**
+ * Pick and construct the backend for a new console session.
+ * Async because Python discovery (for PyStata) may query other extensions.
+ */
+export async function resolveBackend(): Promise<BackendResolution> {
+    const stataPath = getStataPath();
+    if (!stataPath) {
+        return { error: getStataPathHelp() };
+    }
+    return { backend: new ConsoleBackend(stataPath) };
 }

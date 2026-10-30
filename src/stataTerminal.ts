@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { StataProcess } from './stataProcess';
+import { type StataBackend, toStataPath } from './backend';
 
 /** Convert hex color (#RRGGBB) to ANSI 24-bit escape code */
 function hexToAnsi(hex: string): string {
@@ -55,12 +55,12 @@ export class StataTerminal implements vscode.Pseudoterminal {
     onDidDetectError = this.errorEmitter.event;
     onDidStartExecution = this.executionEmitter.event;
 
-    private stataProcess: StataProcess;
+    private backend: StataBackend;
+    private batchCallbacks = new Map<number, () => void>();
     private lineBuffer = '';
     private history: string[] = [];
     private historyIndex = -1;
     private savedLine = '';
-    private promptTimer: ReturnType<typeof setTimeout> | null = null;
     private isOpen = false;
     private pendingCode: { code: string; dir?: string } | null = null;
     private recentInteractiveCmds: string[] = [];
@@ -77,8 +77,8 @@ export class StataTerminal implements vscode.Pseudoterminal {
     private lastGraphMtime = 0;
     private lastVarsMtime = 0;
 
-    constructor(stataPath: string) {
-        this.stataProcess = new StataProcess(stataPath);
+    constructor(backend: StataBackend) {
+        this.backend = backend;
         this.cleanupOldSessions();
         this.tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stata-vsc-'));
         this.graphPath = path.join(this.tempDir, '_graph.png');
@@ -90,12 +90,14 @@ export class StataTerminal implements vscode.Pseudoterminal {
      *  Runs via `run` (completely silent). */
     private writePostDoFile(): void {
         const postDoFile = path.join(this.tempDir, '_post.do');
-        const metaPath = path.join(this.tempDir, '_meta.txt');
-        const resultsPath = path.join(this.tempDir, '_results.tsv');
+        const metaPath = toStataPath(path.join(this.tempDir, '_meta.txt'));
+        const resultsPath = toStataPath(path.join(this.tempDir, '_results.tsv'));
+        const graphPath = toStataPath(this.graphPath);
+        const varsPath = toStataPath(this.varsPath);
         const code = [
             // Fallback graph export — catches graphs from nested do-files
             // (inline injection only works for directly-run code)
-            `capture graph export "${this.graphPath}", as(png) width(800) replace`,
+            `capture graph export "${graphPath}", as(png) width(800) replace`,
 
             // 1. Dataset metadata
             `capture file close _vsc_mh`,
@@ -109,7 +111,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
 
             // 3. Variable list
             `capture file close _vsc_fh`,
-            `capture file open _vsc_fh using "${this.varsPath}", write replace`,
+            `capture file open _vsc_fh using "${varsPath}", write replace`,
             `file write _vsc_fh "name" _tab "type" _tab "format" _tab "label" _n`,
             `capture ds`,
             `if _rc == 0 & "\`r(varlist)'" != "" {`,
@@ -177,20 +179,42 @@ export class StataTerminal implements vscode.Pseudoterminal {
             ` ${IS_MAC ? '\u2303C' : 'Ctrl+C'}    Break${C.reset}\r\n\r\n`
         );
 
-        this.stataProcess.on('output', (data: string) => {
+        this.backend.on('output', (data: string) => {
             this.handleOutput(data, false);
         });
 
-        this.stataProcess.on('stderr', (data: string) => {
+        this.backend.on('stderr', (data: string) => {
             this.handleOutput(data, true);
         });
 
-        this.stataProcess.on('exit', (code: number | null) => {
+        this.backend.on('done', (batchId: number) => {
+            const callback = this.batchCallbacks.get(batchId);
+            this.batchCallbacks.delete(batchId);
+            if (callback) {
+                callback();
+            }
+            if (this.batchCallbacks.size === 0) {
+                this.busyEmitter.fire(false);
+            }
+            this.showPrompt();
+        });
+
+        this.backend.on('ready', () => {
+            if (this.pendingCode !== null) {
+                const { code, dir } = this.pendingCode;
+                this.pendingCode = null;
+                this.doSendCode(code, dir);
+            } else {
+                this.showPrompt();
+            }
+        });
+
+        this.backend.on('exit', (code: number | null) => {
             this.out(`\r\n${C.dim}Stata exited (code ${code ?? '?'})${C.reset}\r\n`);
             this.closeEmitter.fire();
         });
 
-        this.stataProcess.on('error', (err: Error) => {
+        this.backend.on('error', (err: Error) => {
             this.out(`\r\n${C.err}${err.message}${C.reset}\r\n`);
         });
 
@@ -198,18 +222,12 @@ export class StataTerminal implements vscode.Pseudoterminal {
         this.startFileWatchers();
 
         const workspaceDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        this.stataProcess.start(workspaceDir);
-
-        if (this.pendingCode !== null) {
-            const { code, dir } = this.pendingCode;
-            this.pendingCode = null;
-            setTimeout(() => this.doSendCode(code, dir), 300);
-        }
+        this.out(`${C.dim}${this.backend.label}${C.reset}\r\n`);
+        this.backend.start(workspaceDir || os.homedir());
     }
 
     close(): void {
-        this.clearPromptTimer();
-        this.stataProcess.dispose();
+        this.backend.dispose();
         this.cleanupTempDir();
     }
 
@@ -217,10 +235,9 @@ export class StataTerminal implements vscode.Pseudoterminal {
 
     handleInput(data: string): void {
         if (data === '\x03') {
-            this.stataProcess.interrupt();
+            this.backend.interrupt();
             this.lineBuffer = '';
             this.out('^C\r\n');
-            this.showPrompt();
             return;
         }
 
@@ -248,8 +265,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
                 const cleaned = this.stripInlineComments(command);
                 this.recentInteractiveCmds.push(cleaned.trim());
                 this.executionEmitter.fire('interactive');
-                this.busyEmitter.fire(true);
-                this.stataProcess.write(cleaned);
+                this.runBatch([cleaned]);
             } else {
                 this.showPrompt();
             }
@@ -292,19 +308,24 @@ export class StataTerminal implements vscode.Pseudoterminal {
             `capture export delimited${exportArgs} using "${csvPath}", replace`,
         ].join('\n');
         fs.writeFileSync(browseDoFile, code, 'utf-8');
-        this.stataProcess.write(`run "${browseDoFile}"`);
-
-        this.waitForFile(csvPath, 500).then(() => {
+        this.runBatch([`run "${toStataPath(browseDoFile)}"`], () => {
+            if (!fs.existsSync(csvPath)) {
+                this.browseEmitter.fire({ csvPath: '', totalObs: 0 });
+                return;
+            }
             let totalObs: number | undefined;
             if (fs.existsSync(countPath)) {
                 totalObs = parseInt(fs.readFileSync(countPath, 'utf-8').trim(), 10) || undefined;
             }
             this.browseEmitter.fire({ csvPath, totalObs });
-            this.showPrompt();
-        }).catch(() => {
-            this.browseEmitter.fire({ csvPath: '', totalObs: 0 });
-            this.showPrompt();
         });
+    }
+
+    /** Submit commands to the backend, tracking busy state until `done`. */
+    private runBatch(commands: string[], onDone?: () => void): void {
+        this.busyEmitter.fire(true);
+        const id = this.backend.execute(commands);
+        this.batchCallbacks.set(id, onDone ?? (() => { /* none */ }));
     }
 
     // --- Programmatic code execution ---
@@ -319,7 +340,6 @@ export class StataTerminal implements vscode.Pseudoterminal {
 
     private doSendCode(code: string, workingDir?: string): void {
         this.executionEmitter.fire('programmatic');
-        this.busyEmitter.fire(true);
         this.recentInteractiveCmds = [];
         this.lastGraphMtime = this.getFileMtime(this.graphPath);
         this.lastVarsMtime = this.getFileMtime(this.varsPath);
@@ -328,8 +348,8 @@ export class StataTerminal implements vscode.Pseudoterminal {
         try { fs.unlinkSync(path.join(this.tempDir, '_browse.csv')); } catch { /* ignore */ }
 
         // Process lines: replace browse/edit, inject graph export with unique filenames
-        const csvPath = path.join(this.tempDir, '_browse.csv');
-        const countPath = path.join(this.tempDir, '_count.txt');
+        const csvPath = toStataPath(path.join(this.tempDir, '_browse.csv'));
+        const countPath = toStataPath(path.join(this.tempDir, '_count.txt'));
         const sourceLines = code.split(/\r?\n/);
         const outputLines: string[] = [];
         let inGraphCmd = false;
@@ -365,7 +385,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
             if (inGraphCmd && !isContinuation) {
                 inGraphCmd = false;
                 graphNum++;
-                const plotFile = path.join(this.tempDir, `_cap_${this.tempCounter}_${graphNum}.png`);
+                const plotFile = toStataPath(path.join(this.tempDir, `_cap_${this.tempCounter}_${graphNum}.png`));
                 outputLines.push(
                     `capture quietly graph export "${plotFile}", as(png) width(800) replace`
                 );
@@ -379,18 +399,16 @@ export class StataTerminal implements vscode.Pseudoterminal {
 
         let fullCode = '';
         if (workingDir) {
-            fullCode += `cd "${workingDir}"\n`;
+            fullCode += `cd "${toStataPath(workingDir)}"\n`;
         }
         fullCode += outputLines.join('\n') + '\n';
 
         fs.writeFileSync(tempFile, fullCode, 'utf-8');
         // `do file` stops on error by default. `do file, nostop` would continue.
         // Using plain `do` ensures Stata-like error behavior.
-        this.stataProcess.write(`do "${tempFile}"`);
-
-        // Silently run variable metadata
+        // Then silently run the variable/metadata/results export.
         const postDoFile = path.join(this.tempDir, '_post.do');
-        this.stataProcess.write(`run "${postDoFile}"`);
+        this.runBatch([`do "${toStataPath(tempFile)}"`, `run "${toStataPath(postDoFile)}"`]);
 
         for (const line of code.split(/\r?\n/)) {
             const t = line.trim();
@@ -403,28 +421,9 @@ export class StataTerminal implements vscode.Pseudoterminal {
         this.historyIndex = -1;
     }
 
-    private waitForFile(filePath: string, timeoutMs: number): Promise<void> {
-        return new Promise((resolve, reject) => {
-            if (fs.existsSync(filePath)) { resolve(); return; }
-            const interval = setInterval(() => {
-                if (fs.existsSync(filePath)) {
-                    clearInterval(interval);
-                    clearTimeout(timeout);
-                    resolve();
-                }
-            }, 100);
-            const timeout = setTimeout(() => {
-                clearInterval(interval);
-                reject(new Error('timeout'));
-            }, timeoutMs);
-        });
-    }
-
     // --- Output handling ---
 
     private handleOutput(data: string, isStderr: boolean): void {
-        this.clearPromptTimer();
-
         const text = data.replace(/\r?\n/g, '\r\n');
 
         if (isStderr) {
@@ -432,12 +431,6 @@ export class StataTerminal implements vscode.Pseudoterminal {
         } else {
             this.out(this.colorize(text));
         }
-
-        this.promptTimer = setTimeout(() => {
-            this.promptTimer = null;
-            this.busyEmitter.fire(false);
-            this.showPrompt();
-        }, 200);
     }
 
     private colorize(text: string): string {
@@ -691,13 +684,6 @@ export class StataTerminal implements vscode.Pseudoterminal {
         this.writeEmitter.fire(text);
     }
 
-    private clearPromptTimer(): void {
-        if (this.promptTimer) {
-            clearTimeout(this.promptTimer);
-            this.promptTimer = null;
-        }
-    }
-
     private cleanupTempDir(): void {
         try {
             for (const f of fs.readdirSync(this.tempDir)) {
@@ -708,12 +694,11 @@ export class StataTerminal implements vscode.Pseudoterminal {
     }
 
     dispose(): void {
-        this.clearPromptTimer();
         this.dirWatcher?.close();
         this.graphDebounces.forEach(t => clearTimeout(t));
         this.graphDebounces.clear();
         if (this.varsDebounce) { clearTimeout(this.varsDebounce); }
-        this.stataProcess.dispose();
+        this.backend.dispose();
         this.cleanupTempDir();
         this.writeEmitter.dispose();
         this.closeEmitter.dispose();

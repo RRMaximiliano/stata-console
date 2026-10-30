@@ -12,7 +12,8 @@ import { StataHoverProvider } from './hoverProvider';
 import { StataLinkProvider } from './linkProvider';
 import { StataOutlineProvider } from './outlineProvider';
 import { StataDefinitionProvider } from './definitionProvider';
-import { getStataPath, getStataPathDiagnostics, getStataPathHelp } from './config';
+import { getStataPathDiagnostics, resolveBackend } from './config';
+import { toStataPath } from './backend';
 import { registerSthlpViewer } from './sthlpViewer';
 
 let stataTerminal: StataTerminal | undefined;
@@ -130,16 +131,25 @@ async function applyStataDiagnostic(errorMsg: string): Promise<void> {
     diagnosticCollection.set(editor.document.uri, [diag]);
 }
 
-function ensureConsole(): boolean {
+let consoleStarting: Promise<boolean> | undefined;
+
+/** Open the console if needed. Concurrent callers share one startup. */
+function ensureConsole(): Promise<boolean> {
     if (terminal && stataTerminal) {
         terminal.show(true);
-        return true;
+        return Promise.resolve(true);
     }
+    if (!consoleStarting) {
+        consoleStarting = createConsole().finally(() => { consoleStarting = undefined; });
+    }
+    return consoleStarting;
+}
 
-    const stataPath = getStataPath();
-    if (!stataPath) {
+async function createConsole(): Promise<boolean> {
+    const { backend, error } = await resolveBackend();
+    if (!backend) {
         vscode.window.showErrorMessage(
-            getStataPathHelp(),
+            error ?? 'Could not start Stata.',
             'Run Diagnostics',
             'Open Settings'
         ).then((choice) => {
@@ -152,7 +162,7 @@ function ensureConsole(): boolean {
         return false;
     }
 
-    stataTerminal = new StataTerminal(stataPath);
+    stataTerminal = new StataTerminal(backend);
 
     // Graph panel + plots list
     stataTerminal.onDidDetectGraph((graphPath) => {
@@ -223,7 +233,7 @@ function ensureConsole(): boolean {
     });
 
     statusBarItem.text = '$(terminal) Stata';
-    statusBarItem.tooltip = `Stata Console \u2014 ${stataPath}`;
+    statusBarItem.tooltip = `Stata Console \u2014 ${backend.label}`;
     vscode.commands.executeCommand('setContext', 'stata.consoleActive', true);
 
     const disposable = vscode.window.onDidCloseTerminal((t) => {
@@ -300,7 +310,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.commands.registerCommand('stata.openConsole', () => {
-            ensureConsole();
+            void ensureConsole();
         })
     );
 
@@ -319,16 +329,18 @@ export function activate(context: vscode.ExtensionContext) {
             if (!editor.selection.isEmpty) {
                 const code = editor.document.getText(editor.selection);
                 if (code.trim() === '') { return; }
-                if (!ensureConsole()) { return; }
-                recordRunTarget(editor, editor.selection.start.line);
-                stataTerminal!.sendCode(code, fileDir);
+                void ensureConsole().then((ok) => {
+                    if (!ok) { return; }
+                    recordRunTarget(editor, editor.selection.start.line);
+                    stataTerminal!.sendCode(code, fileDir);
+                });
             } else {
                 const filePath = editor.document.fileName;
                 if (!filePath) { return; }
-                editor.document.save().then(() => {
-                    if (!ensureConsole()) { return; }
+                void editor.document.save().then(async () => {
+                    if (!(await ensureConsole())) { return; }
                     recordRunTarget(editor, editor.selection.active.line);
-                    stataTerminal!.sendCode(`do "${filePath}"`, fileDir);
+                    stataTerminal!.sendCode(`do "${toStataPath(filePath)}"`, fileDir);
                 });
             }
         })
@@ -354,16 +366,20 @@ export function activate(context: vscode.ExtensionContext) {
                 // Only send non-empty, non-comment lines to Stata
                 const trimmed = code.trim();
                 if (trimmed === '' || trimmed.startsWith('*') || trimmed.startsWith('//')) { return; }
-                if (!ensureConsole()) { return; }
-                recordRunTarget(editor, lineNum);
-                stataTerminal!.sendCode(code, path.dirname(editor.document.fileName));
+                void ensureConsole().then((ok) => {
+                    if (!ok) { return; }
+                    recordRunTarget(editor, lineNum);
+                    stataTerminal!.sendCode(code, path.dirname(editor.document.fileName));
+                });
             } else {
                 // Has selection — run it
                 const code = editor.document.getText(editor.selection);
                 if (code.trim() === '') { return; }
-                if (!ensureConsole()) { return; }
-                recordRunTarget(editor, editor.selection.start.line);
-                stataTerminal!.sendCode(code, path.dirname(editor.document.fileName));
+                void ensureConsole().then((ok) => {
+                    if (!ok) { return; }
+                    recordRunTarget(editor, editor.selection.start.line);
+                    stataTerminal!.sendCode(code, path.dirname(editor.document.fileName));
+                });
             }
         })
     );
@@ -375,17 +391,17 @@ export function activate(context: vscode.ExtensionContext) {
             diagnosticCollection.clear();
             const filePath = editor.document.fileName;
             if (!filePath) { return; }
-            editor.document.save().then(() => {
-                if (!ensureConsole()) { return; }
+            void editor.document.save().then(async () => {
+                if (!(await ensureConsole())) { return; }
                 recordRunTarget(editor, editor.selection.active.line);
-                stataTerminal!.sendCode(`do "${filePath}"`, path.dirname(filePath));
+                stataTerminal!.sendCode(`do "${toStataPath(filePath)}"`, path.dirname(filePath));
             });
         })
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('stata.browse', () => {
-            if (!ensureConsole()) { return; }
+        vscode.commands.registerCommand('stata.browse', async () => {
+            if (!(await ensureConsole())) { return; }
             stataTerminal!.handleBrowse('');
         })
     );
@@ -438,7 +454,7 @@ export function activate(context: vscode.ExtensionContext) {
             if (terminal) {
                 terminal.dispose(); // triggers cleanup via onDidCloseTerminal
             }
-            setTimeout(() => ensureConsole(), 500);
+            setTimeout(() => { void ensureConsole(); }, 500);
         })
     );
 
