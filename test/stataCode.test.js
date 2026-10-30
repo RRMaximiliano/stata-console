@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
     browseArgs,
     buildBrowseHelper,
+    buildGraphExportHelper,
     buildPostDoFile,
     isGraphCommand,
     rewriteCode,
@@ -18,6 +19,25 @@ const options = {
     browseLimit: 500,
     browseHelper: '/tmp/stata-vsc-abc/_browse.do',
 };
+
+test('with a graph helper, graph capture preserves _rc and skips failed captured graphs', () => {
+    const o = { ...options, graphHelper: '/tmp/stata-vsc-abc/_graph_export.do' };
+    const { code, graphCount } = rewriteCode('scatter y x\ncapture scatter nosuch x\ncap noi histogram x', o);
+    assert.equal(graphCount, 3);
+    const runs = code.split('\n').filter((l) => l.startsWith('quietly run'));
+    assert.equal(runs.length, 3);
+    assert.match(runs[0], /_graph_export\.do"' `"\/tmp\/stata-vsc-abc\/_cap_7_1\.png"' 0 800$/);
+    assert.match(runs[1], / 1 800$/);
+    assert.match(runs[2], / 1 800$/);
+    const helper = buildGraphExportHelper();
+    assert.match(helper, /local _vsc_grc = _rc/);
+    assert.match(helper, /capture error `_vsc_grc'/);
+});
+
+test('program dir/list abbreviations are not blocks that wait for end', () => {
+    const { code } = rewriteCode('pr di\nbrowse', options);
+    assert.ok(!code.includes('\nbrowse'), 'browse after `pr di` is still rewritten');
+});
 
 test('paths are converted to forward slashes and quoted for Stata', () => {
     assert.equal(stataPathText('C:\\Users\\me\\proj'), 'C:/Users/me/proj');

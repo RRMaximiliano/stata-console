@@ -12,6 +12,7 @@ import {
     BROWSE_RE,
     browseArgs,
     buildBrowseHelper,
+    buildGraphExportHelper,
     buildPostDoFile,
     rewriteCode,
     stataPathText,
@@ -44,6 +45,8 @@ function loadColors(): Palette {
 
 let C = loadColors();
 const IS_MAC = process.platform === 'darwin';
+/** How long Break may take before the console suggests restarting (PyStata). */
+const BREAK_GRACE_MS = 4000;
 const MAX_HISTORY = 1000;
 const MAX_PROGRAMMATIC_HISTORY_LINES = 20;
 const GRAPH_DEBOUNCE_MS = 250;
@@ -125,6 +128,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
     private tempCounter = 0;
     private graphPath: string;
     private browseHelper: string;
+    private graphHelper: string;
     private postDoFile: string;
     private dirWatcher: fs.FSWatcher | null = null;
     private graphDebounce: ReturnType<typeof setTimeout> | null = null;
@@ -141,6 +145,8 @@ export class StataTerminal implements vscode.Pseudoterminal {
         this.browseHelper = path.join(this.tempDir, '_browse.do');
         this.postDoFile = path.join(this.tempDir, '_post.do');
         fs.writeFileSync(this.browseHelper, buildBrowseHelper(this.tempDir), 'utf-8');
+        this.graphHelper = path.join(this.tempDir, '_graph_export.do');
+        fs.writeFileSync(this.graphHelper, buildGraphExportHelper(), 'utf-8');
         fs.writeFileSync(this.postDoFile, buildPostDoFile({
             meta: path.join(this.tempDir, '_meta.txt'),
             vars: path.join(this.tempDir, '_vars.tsv'),
@@ -272,7 +278,30 @@ export class StataTerminal implements vscode.Pseudoterminal {
         this.out('^C\r\n');
         if (this.batches.size === 0) {
             this.showPrompt();
+        } else if (this.backend.kind === 'pystata') {
+            this.warnIfBreakIgnored(new Set(this.batches.keys()));
         }
+    }
+
+    /**
+     * Break cannot end a PyStata command that is waiting for keyboard input
+     * (`pause`, `input`, an interactive `mata` prompt); offer a restart.
+     */
+    private warnIfBreakIgnored(running: Set<number>): void {
+        setTimeout(() => {
+            if (this.closed || ![...running].some((id) => this.batches.has(id))) { return; }
+            this.beginOutput();
+            this.out(`${C.err}Stata did not respond to Break. It may be waiting for keyboard input `
+                + `(pause, input, or a mata prompt), which the PyStata backend cannot provide.${C.reset}\r\n`);
+            void vscode.window.showWarningMessage(
+                'Stata did not respond to Break. It may be waiting for keyboard input (pause, input, or mata).',
+                'Restart Stata',
+            ).then((choice) => {
+                if (choice === 'Restart Stata') {
+                    void vscode.commands.executeCommand('stata.restartStata');
+                }
+            });
+        }, BREAK_GRACE_MS);
     }
 
     private submitLine(moreFollows: boolean): void {
@@ -312,10 +341,13 @@ export class StataTerminal implements vscode.Pseudoterminal {
             }
             case 'block': {
                 this.executionEmitter.fire('interactive');
-                const id = ++this.tempCounter;
-                const file = path.join(this.tempDir, `_int_${id}.do`);
-                fs.writeFileSync(file, result.code + '\n', 'utf-8');
-                this.runInteractive([`do ${stataQuote(file)}`], { cmd: result.lines[0], lines: result.lines.length }, file);
+                const runId = ++this.tempCounter;
+                // Same rewriting as Run: browse opens the viewer and every graph is captured.
+                const rewritten = this.rewrite(result.code, runId);
+                const file = path.join(this.tempDir, `_int_${runId}.do`);
+                fs.writeFileSync(file, rewritten.code, 'utf-8');
+                this.runInteractive([`do ${stataQuote(file)}`], { cmd: result.lines[0], lines: result.lines.length }, file,
+                    { runId, browseBase: rewritten.browseBase });
                 break;
             }
         }
@@ -328,12 +360,28 @@ export class StataTerminal implements vscode.Pseudoterminal {
         }
     }
 
-    private runInteractive(commands: string[], echo: { cmd: string; lines: number }, file?: string): void {
+    private runInteractive(
+        commands: string[],
+        echo: { cmd: string; lines: number },
+        file?: string,
+        capture?: { runId: number; browseBase?: string },
+    ): void {
         this.submit([...commands, `run ${stataQuote(this.postDoFile)}`], {
             origin: 'interactive',
             files: file ? [file] : [],
             refreshState: true,
             echoes: [echo],
+            ...capture,
+        });
+    }
+
+    private rewrite(code: string, runId: number): ReturnType<typeof rewriteCode> {
+        return rewriteCode(code, {
+            dir: this.tempDir,
+            runId,
+            browseLimit: this.browseLimit(),
+            browseHelper: this.browseHelper,
+            graphHelper: this.graphHelper,
         });
     }
 
@@ -475,12 +523,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
         this.executionEmitter.fire('programmatic');
 
         const runId = ++this.tempCounter;
-        const rewritten = rewriteCode(code, {
-            dir: this.tempDir,
-            runId,
-            browseLimit: this.browseLimit(),
-            browseHelper: this.browseHelper,
-        });
+        const rewritten = this.rewrite(code, runId);
         const tempFile = path.join(this.tempDir, `_run_${runId}.do`);
         fs.writeFileSync(tempFile, rewritten.code, 'utf-8');
 

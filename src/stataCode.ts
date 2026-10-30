@@ -27,6 +27,7 @@ const COMMA_TOKEN = '__VSC_COMMA__';
 
 export const BROWSE_RE = /^(br|bro|brow|brows|browse|ed|edi|edit)\b(.*)$/i;
 
+const CAPTURED_RE = /^(?:(?:qui\w*|n\w*)\s*:?\s+)*cap(?:t(?:u(?:r(?:e)?)?)?)?\b/;
 const GRAPH_PREFIX_RE = /^(?:(?:quietly|qui|capture|cap|noisily|noi|n)\s+|(?:by|bys|bysort)\s+[^:]*:\s*)*/;
 const GRAPH_RE = /^(?:scatter|histogram|hist|kdensity|twoway|tw|two|line|connected|area|tsline|xtline|graph\s+(?:bar|box|hbox|pie|dot|hbar|combine|matrix|twoway)|gr(?:a|ap)?\s+(?:bar|box|hbox|pie|dot|hbar|combine|matrix|twoway)|coefplot|binscatter|marginsplot|sts\s+graph|stcurve|qnorm|pnorm|qqplot|gladder|lowess|lpoly|avplot|avplots|rvfplot|cprplot|acprplot|lvr2plot|dotplot|spikeplot|cdfplot|heatplot|ac|pac)\b/;
 
@@ -50,6 +51,8 @@ export interface RewriteOptions {
     browseLimit: number;
     /** Do-file that exports the Data Viewer CSV (see `buildBrowseHelper`). */
     browseHelper: string;
+    /** Do-file that exports the current graph without touching `_rc` (see `buildGraphExportHelper`). */
+    graphHelper?: string;
     graphWidth?: number;
 }
 
@@ -74,6 +77,7 @@ export function rewriteCode(code: string, o: RewriteOptions): RewriteResult {
     let continued = false;
     let inGraph = false;
     let graphSkipped = false;
+    let graphCaptured = false;
     let delimitSemi = false;
     let untilEnd = false;
     let graphCount = 0;
@@ -132,6 +136,7 @@ export function rewriteCode(code: string, o: RewriteOptions): RewriteResult {
         if (!inGraph && atStart && isGraphCommand(command)) {
             inGraph = true;
             graphSkipped = false;
+            graphCaptured = CAPTURED_RE.test(command.toLowerCase());
         }
         if (inGraph) {
             // A `nodraw` graph is not displayed, so exporting would grab a stale one.
@@ -141,7 +146,9 @@ export function rewriteCode(code: string, o: RewriteOptions): RewriteResult {
                 if (!graphSkipped) {
                     graphCount++;
                     const file = `${o.dir}/_cap_${o.runId}_${graphCount}.png`;
-                    out.push(`capture quietly graph export ${stataQuote(file)}, as(png) width(${width}) replace`);
+                    out.push(o.graphHelper
+                        ? `quietly run ${stataQuote(o.graphHelper)} ${stataQuote(file)} ${graphCaptured ? 1 : 0} ${width}`
+                        : `capture quietly graph export ${stataQuote(file)}, as(png) width(${width}) replace`);
                 }
             }
         }
@@ -160,6 +167,22 @@ export function rewriteCode(code: string, o: RewriteOptions): RewriteResult {
  * and the true number of matching observations to `<baseName>.count`, without
  * changing the data, the sort order, or r().
  */
+/**
+ * Do-file run after each graph command as `quietly run "<helper>" "<png>" <captured> <width>`.
+ * Exports the graph without changing `_rc`, and skips the export when a
+ * `capture`d graph command failed (the graph in memory would be a stale one).
+ */
+export function buildGraphExportHelper(): string {
+    return [
+        'args file captured width',
+        'local _vsc_grc = _rc',
+        "if !(`captured' & `_vsc_grc') {",
+        "    capture quietly graph export `\"`file'\"', as(png) width(`width') replace",
+        '}',
+        "capture error `_vsc_grc'",
+    ].join('\n') + '\n';
+}
+
 export function buildBrowseHelper(dir: string): string {
     const out = (ext: string) => '`"' + stataPathText(dir) + "/`_vsc_base'" + ext + '"\'';
     return [
@@ -317,7 +340,8 @@ export function buildPostDoFile(p: PostPaths, graphWidth = 800): string {
         `_return hold _vsc_ph`,
         `capture {`,
         `    quietly graph describe`,
-        `    local _vsc_sig = r(command_date) + "|" + r(command_time) + "|" + string(strlen(r(command)))`,
+        // Seconds-resolution time alone misses two graphs drawn in the same second.
+        `    local _vsc_sig = r(command_date) + "|" + r(command_time) + "|" + string(_N) + "|" + substr(ustrregexra(r(command), "[^A-Za-z0-9_ .]", ""), 1, 200)`,
         `    local _vsc_prev ""`,
         `    capture file open _vsc_gh using ${stataQuote(p.graphSig)}, read`,
         `    if _rc == 0 {`,

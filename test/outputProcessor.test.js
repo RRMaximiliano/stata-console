@@ -75,8 +75,21 @@ test('internal commands and do-file noise are filtered, including wrapped lines'
 });
 
 test('internal commands are recognized by shape even when the path is split', () => {
-    const { out } = run(['. run `"/var/folders/xx/T/stata-vs\n> c-q/_post.do"\'\nhello\n']);
+    const { out } = run(['. run `"/tmp/stata-vs\n> c-abc123/_post.do"\'\nhello\n']);
     assert.equal(out, 'hello\r\n');
+});
+
+test('user commands with compound-quoted paths outside the session dir stay visible', () => {
+    const { out, errors } = run(['. do `"$root/clean.do"\'\nfile $root/clean.do not found\nr(601);\n']);
+    assert.match(out, /do `"\$root\/clean\.do"'/);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /^\. do `"\$root\/clean\.do"'/);
+    assert.ok(run(['. graph export `"$out/fig1.png"\', replace\n']).out.includes('graph export'));
+});
+
+test('the r(N); Stata repeats after end of do-file is shown once', () => {
+    const plain = run([SESSION]).out.replace(/<[A-Z/]+>/g, '');
+    assert.equal((plain.match(/r\(111\);/g) || []).length, 1);
 });
 
 test('errors are reported once, with their message, and the repeat after end of do-file is ignored', () => {

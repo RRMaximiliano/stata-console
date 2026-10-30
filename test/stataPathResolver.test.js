@@ -49,6 +49,8 @@ function createEnv({
 test('expandUserPath resolves home-relative paths', () => {
     assert.equal(expandUserPath('~/StataMP.app', '/Users/alice'), '/Users/alice/StataMP.app');
     assert.equal(expandUserPath('/Applications/Stata', '/Users/alice'), '/Applications/Stata');
+    // Windows Explorer "Copy as path" adds quotes
+    assert.equal(expandUserPath('"C:\\Program Files\\Stata19\\StataMP-64.exe"', 'C:\\Users\\a'), 'C:\\Program Files\\Stata19\\StataMP-64.exe');
 });
 
 test('app bundle candidates prefer the correct executable for edition-specific apps', () => {
@@ -168,6 +170,8 @@ test('Windows searches standard and enumerated installs on both Program Files ro
         assert.ok(paths.includes(`C:\\Program Files\\${version}\\StataMP-64.exe`));
     }
     assert.ok(paths.includes('C:\\Program Files\\StataNow20\\StataMP-64.exe'));
+    // installed folders are probed before the hard-coded names, newest first
+    assert.ok(paths.indexOf('C:\\Program Files\\StataNow20\\StataMP-64.exe') < paths.indexOf('C:\\Program Files\\Stata19\\StataMP-64.exe'));
     assert.ok(paths.includes('D:\\Program Files\\Stata19\\StataMP-64.exe'));
     assert.equal(resolveStataPath('', 'SE', env), 'C:\\Program Files (x86)\\Stata16\\StataSE.exe');
 });

@@ -80,7 +80,8 @@ export function resolveStataInstallDir(executablePath: string, env: ResolverEnvi
 }
 
 export function expandUserPath(inputPath: string, homeDir: string): string {
-    const trimmed = inputPath.trim();
+    // Windows Explorer's "Copy as path" wraps the path in double quotes.
+    const trimmed = inputPath.trim().replace(/^"(.*)"$/, '$1').trim();
     if (trimmed === '~') {
         return homeDir;
     }
@@ -181,12 +182,12 @@ export function buildSearchPaths(
         for (const drive of drives) {
             for (const folder of ['Program Files', 'Program Files (x86)']) {
                 const root = join(drive, folder);
-                const dirs = new Set(['Stata19', 'StataNow19', 'Stata18', 'StataNow18', 'Stata17', 'StataNow17', 'Stata']);
-                for (const entry of env.listDir(root).filter((entry) => /^stata/i.test(entry)).sort().reverse()) {
-                    if (env.isDirectory(join(root, entry))) {
-                        dirs.add(entry);
-                    }
-                }
+                // Installed folders first, newest version first, then the usual names.
+                const version = (name: string) => parseInt(name.match(/(\d+)\s*$/)?.[1] ?? '0', 10);
+                const found = env.listDir(root)
+                    .filter((entry) => /^stata/i.test(entry) && env.isDirectory(join(root, entry)))
+                    .sort((a, b) => version(b) - version(a) || b.localeCompare(a));
+                const dirs = new Set([...found, 'Stata19', 'StataNow19', 'Stata18', 'StataNow18', 'Stata17', 'StataNow17', 'Stata']);
                 for (const dir of dirs) {
                     for (const name of binaryNames(edition, env.platform)) {
                         paths.add(join(root, dir, name));

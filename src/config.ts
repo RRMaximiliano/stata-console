@@ -231,6 +231,18 @@ export async function getBackendDiagnostics(stataPath?: string): Promise<Backend
 }
 
 /**
+ * First detected Stata whose install has PyStata (17+), so an older Stata on
+ * PATH or in Program Files does not shadow a newer one.
+ */
+function findPyStataCapable(edition: string, env: ResolverEnvironment): string | undefined {
+    const diagnostics = getResolverDiagnostics('', edition, env);
+    return [...diagnostics.pathMatches, ...diagnostics.existingCandidates].find((candidate) => {
+        const dir = resolveStataInstallDir(candidate, env);
+        return !!dir && env.isDirectory(path.join(dir, 'utilities', 'pystata'));
+    });
+}
+
+/**
  * Pick and construct the backend for a new console session.
  * Async because Python discovery (for PyStata) may query other extensions.
  */
@@ -246,6 +258,7 @@ export async function resolveBackend(): Promise<BackendResolution> {
     const configuredDir = config.get<string>('installDir', '').trim();
     const stataPath = userPath ? resolveConfiguredPath(userPath, edition, env)
         : backend === 'pystata' && configuredDir ? resolveConfiguredPath(expandUserPath(configuredDir, env.homeDir), edition, env)
+        : backend === 'pystata' ? findPyStataCapable(edition, env) ?? resolveStataPath('', edition, env)
         : resolveStataPath('', edition, env);
     if (userPath && !stataPath) {
         return { error: `Configured Stata path is not a valid executable: ${userPath}. Correct stata.stataPath or leave it empty for auto-detection.` };

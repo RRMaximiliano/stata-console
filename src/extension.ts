@@ -14,7 +14,6 @@ import { StataLinkProvider } from './linkProvider';
 import { StataOutlineProvider } from './outlineProvider';
 import { StataDefinitionProvider } from './definitionProvider';
 import { getStataPathDiagnostics, getBackendDiagnostics, resolveBackend, type BackendDiagnostics } from './config';
-import { stataQuote } from './stataCode';
 import { registerSthlpViewer } from './sthlpViewer';
 
 let stataTerminal: StataTerminal | undefined;
@@ -287,7 +286,6 @@ async function createConsole(): Promise<StataTerminal | undefined> {
     statusBarItem.text = '$(terminal) Stata';
     statusBarItem.tooltip = `Stata Console — ${backend.label}`;
     vscode.commands.executeCommand('setContext', 'stata.consoleActive', true);
-    updateStataTerminalFocus();
 
     const disposable = vscode.window.onDidCloseTerminal((t) => {
         if (t === term) {
@@ -297,6 +295,7 @@ async function createConsole(): Promise<StataTerminal | undefined> {
     });
 
     term.show();
+    updateStataTerminalFocus();
     return session;
 }
 
@@ -345,8 +344,10 @@ function runWholeFile(editor: vscode.TextEditor): void {
         runCode(editor, doc.getText(), target);
         return;
     }
+    // Run the saved text rather than `do "file"`, so browse and every graph
+    // in the file are handled like a selection.
     void doc.save().then(() => ensureConsole()).then((session) => {
-        session?.sendCode(`do ${stataQuote(doc.fileName)}`, workingDir, target);
+        session?.sendCode(doc.getText(), workingDir, target);
     });
 }
 

@@ -23,6 +23,12 @@ const settings = {};
 const fake = {
     EventEmitter,
     settings,
+    window: {
+        showWarningMessage: () => Promise.resolve(undefined),
+    },
+    commands: {
+        executeCommand: () => Promise.resolve(undefined),
+    },
     workspace: {
         workspaceFolders: undefined,
         getConfiguration: (section) => ({

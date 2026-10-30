@@ -67,7 +67,10 @@ export function cleanupStaleSessions(
 }
 
 export function removeSessionDir(dir: string): void {
+    // Drop the lock first: if removal fails (Windows keeps files open briefly
+    // after the process is killed), the next cleanup sees a dead session.
+    try { fs.unlinkSync(path.join(dir, LOCK_FILE)); } catch { /* ignore */ }
     try {
-        fs.rmSync(dir, { recursive: true, force: true });
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     } catch { /* ignore */ }
 }

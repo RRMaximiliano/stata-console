@@ -1,6 +1,7 @@
 """PyStata worker. stdin is JSONL; stdout is text plus token-prefixed JSONL."""
 
 import argparse
+import io
 import json
 import os
 import queue
@@ -40,6 +41,21 @@ class Output:
             self.line_start = True
 
 
+def isolate_stdin():
+    """Move the bridge protocol off fd 0 and give Stata a private stdin.
+
+    Stata reads fd 0 itself at `pause`, `input`, or an interactive mata
+    prompt and would otherwise swallow bridge requests. Its new stdin is a pipe
+    that is never written (EOF would make it spin), so such a prompt just waits
+    until the user restarts, while `break` and `stop` still arrive.
+    """
+    control = io.open(os.dup(0), 'r', encoding='utf-8', errors='replace')
+    read_fd, write_fd = os.pipe()
+    os.dup2(read_fd, 0)
+    os.close(read_fd)
+    return control, write_fd
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--stata-dir', required=True)
@@ -47,7 +63,7 @@ def main():
     parser.add_argument('--token', default='')
     args = parser.parse_args()
 
-    sys.stdin.reconfigure(encoding='utf-8', errors='replace')
+    control, _stata_stdin_writer = isolate_stdin()
     sys.stdout.reconfigure(encoding='utf-8', errors='replace', newline='\n', write_through=True)
     sys.stderr.reconfigure(encoding='utf-8', errors='replace', newline='\n', write_through=True)
     output = Output(sys.stdout, args.token)
@@ -98,7 +114,7 @@ def main():
 
     def read_input():
         try:
-            for line in sys.stdin:
+            for line in control:
                 try:
                     message = json.loads(line)
                     if not isinstance(message, dict):

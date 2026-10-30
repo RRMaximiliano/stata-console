@@ -432,3 +432,30 @@ test('Ctrl+C breaks a running command and the console recovers', { skip }, async
     await s.type('display "recovered"');
     assert.match(s.since(mark), /recovered/);
 });
+
+test('typed blocks capture graphs and open browse; graph capture keeps _rc', { skip }, async (t) => {
+    const dir = makeDir(t);
+    const s = await openSession(t);
+    await s.type('sysuse auto, clear', 'if 1 {', '    scatter price mpg', '    browse price in 1/3', '}');
+    assert.equal(s.graphs.length, 1, 'graph inside a typed block is captured');
+    assert.equal(s.browses.length, 1, 'browse inside a typed block opens the viewer');
+    assert.deepEqual(s.errors, []);
+
+    const mark = s.mark();
+    s.term.sendCode('capture scatter nosuchvar mpg\ndisplay "rc=" _rc', dir);
+    await s.settle();
+    assert.match(s.since(mark), /rc=111/, 'the injected export does not reset _rc');
+    assert.equal(s.graphs.length, 1, 'a failed captured graph does not re-export the old one');
+});
+
+test('a user do-file with a compound-quoted path is echoed, not hidden', { skip }, async (t) => {
+    const dir = makeDir(t);
+    fs.writeFileSync(path.join(dir, 'child.do'), 'display "in child"\n');
+    const s = await openSession(t);
+    const mark = s.mark();
+    s.term.sendCode('do `"' + dir.replace(/\\/g, '/') + '/child.do"\'', dir);
+    await s.settle();
+    const out = s.since(mark);
+    assert.match(out, /\. do `"[\s\S]*child\.do"'/);
+    assert.match(out, /in child/);
+});

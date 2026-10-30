@@ -27,7 +27,8 @@ const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
 const ERROR_CODE_RE = /^r\(\d+\);/;
 const ERROR_PREAMBLE_RE = /^(invalid |unrecognized |unknown |command .* is unrecognized|variable .* not found|no variables defined|option .* not allowed|type mismatch|last estimates not found|no observations|not possible|too few|too many|may not|does not|cannot )/;
 // Commands the extension generates quote their file argument with a compound quote.
-const INTERNAL_COMMAND_RE = /^\.\s+(?:(?:capture|quietly)\s+)*(?:do|run|cd|graph export)\s+`"/;
+// The path must be in the session dir, so user commands like `do `"$root/x.do"'` stay visible.
+const INTERNAL_COMMAND_RE = /^\.\s+(?:(?:capture|quietly)\s+)*(?:do|run|cd|graph export)\s+`"(.*)$/;
 const BLANK = Symbol('blank');
 const PROMPT_ARTIFACT_RE = /^[.:>] ?$/;
 const NUMBERED_CONTINUATION_RE = /^\s*\d+\.(?: |$)/;
@@ -151,13 +152,21 @@ export class OutputProcessor {
         return `${p.err}${chunk.replace(/\r?\n/g, '\r\n')}${p.reset}`;
     }
 
+    /** An extension-generated command; Stata may wrap its path onto `> ` lines. */
+    private isInternalCommand(stripped: string): boolean {
+        const match = stripped.match(INTERNAL_COMMAND_RE);
+        if (!match) { return false; }
+        const fragment = match[1];
+        return this.options.internalMarkers.some((m) => m && (fragment.includes(m) || m.startsWith(fragment)));
+    }
+
     private processLine(line: string): string | typeof BLANK | null {
         const p = this.palette;
         const stripped = line.trimStart();
         const isContinuation = /^> /.test(stripped);
 
         // --- Filter the extension's own commands ---
-        if (INTERNAL_COMMAND_RE.test(stripped) || this.options.internalMarkers.some((m) => m && line.includes(m))) {
+        if (this.isInternalCommand(stripped) || this.options.internalMarkers.some((m) => m && line.includes(m))) {
             this.hidingInternal = true;
             return null;
         }
@@ -205,13 +214,16 @@ export class OutputProcessor {
             const repeated = this.afterEndOfDoFile;
             this.afterEndOfDoFile = false;
             this.inError = false;
-            if (!repeated) {
-                // Report from the command that failed, not the echoed lines before it.
-                let start = this.errorBlock.length;
-                while (start > 0 && !/^\. /.test(this.errorBlock[start - 1])) { start--; }
-                const from = start > 0 ? start - 1 : 0;
-                this.options.onError?.([...this.errorBlock.slice(from).map((l) => l.trim()), stripped].join('\n'));
+            if (repeated) {
+                // Stata repeats the code after `end of do-file`; show it once.
+                this.errorBlock = [];
+                return null;
             }
+            // Report from the command that failed, not the echoed lines before it.
+            let start = this.errorBlock.length;
+            while (start > 0 && !/^\. /.test(this.errorBlock[start - 1])) { start--; }
+            const from = start > 0 ? start - 1 : 0;
+            this.options.onError?.([...this.errorBlock.slice(from).map((l) => l.trim()), stripped].join('\n'));
             this.errorBlock = [];
             return `${p.err}${line}${p.reset}`;
         }

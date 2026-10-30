@@ -9,6 +9,16 @@ function feed(lines) {
     return lines.map((l) => acc.push(l));
 }
 
+test('program dir/list abbreviations do not wait for end; abbreviated prefixes before mata do', () => {
+    const { startsEndBlock } = require('../out/stataLexer.js');
+    for (const c of ['pr di', 'program di', 'program l', 'pr li _all', 'program list foo', 'program drop foo']) {
+        assert.equal(startsEndBlock(c), false, c);
+    }
+    for (const c of ['mata', 'quie mata', 'quietly: mata', 'capt noi mata:', 'program define foo', 'pr foo', 'input x y']) {
+        assert.equal(startsEndBlock(c), true, c);
+    }
+});
+
 test('single complete lines pass straight through', () => {
     const [a, b] = feed(['summarize price // note', 'display "{"']);
     assert.deepEqual(a, { kind: 'line', code: 'summarize price // note' });
