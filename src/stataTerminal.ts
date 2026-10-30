@@ -2,7 +2,21 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { type StataBackend, toStataPath } from './backend';
+import * as crypto from 'crypto';
+import { type StataBackend } from './backend';
+import { InputAccumulator } from './inputAccumulator';
+import { LineEditor, parseInput, type InputEvent } from './lineEditor';
+import { OutputProcessor, type Palette } from './outputProcessor';
+import { cleanupStaleSessions, createSessionDir, removeSessionDir } from './sessionDir';
+import {
+    BROWSE_RE,
+    browseArgs,
+    buildBrowseHelper,
+    buildPostDoFile,
+    rewriteCode,
+    stataPathText,
+    stataQuote,
+} from './stataCode';
 
 /** Convert hex color (#RRGGBB) to ANSI 24-bit escape code */
 function hexToAnsi(hex: string): string {
@@ -14,7 +28,7 @@ function hexToAnsi(hex: string): string {
 }
 
 /** Read console colors from user settings, with defaults */
-function loadColors() {
+function loadColors(): Palette {
     const cfg = vscode.workspace.getConfiguration('stata.colors');
     return {
         prompt: hexToAnsi(cfg.get<string>('prompt', '#4E9A6A')),
@@ -30,9 +44,44 @@ function loadColors() {
 
 let C = loadColors();
 const IS_MAC = process.platform === 'darwin';
-const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
+const MAX_HISTORY = 1000;
+const MAX_PROGRAMMATIC_HISTORY_LINES = 20;
+const GRAPH_DEBOUNCE_MS = 250;
+const PARTIAL_LINE_MS = 80;
 
-const BROWSE_RE = /^(br|bro|brow|brows|browse|ed|edi|edit)\b(.*)$/i;
+/** Where in an editor a run came from, so errors can be mapped back to a line. */
+export interface RunTarget {
+    uri: vscode.Uri;
+    /** Best-guess line when an error cannot be matched to a command. */
+    line: number;
+    /** Range of document lines the executed text came from (inclusive). */
+    from: number;
+    to: number;
+}
+
+export interface StataErrorEvent {
+    message: string;
+    origin: 'interactive' | 'programmatic';
+    target?: RunTarget;
+}
+
+interface Batch {
+    origin: 'interactive' | 'programmatic';
+    target?: RunTarget;
+    /** Do-files to delete once the batch is done. */
+    files: string[];
+    /** Refresh the sidebar panels (the batch ends with the post-run export). */
+    refreshState: boolean;
+    runId?: number;
+    browseBase?: string;
+    echoes: { cmd: string; lines: number }[];
+}
+
+interface PendingRun {
+    code: string;
+    workingDir?: string;
+    target?: RunTarget;
+}
 
 export class StataTerminal implements vscode.Pseudoterminal {
     private writeEmitter = new vscode.EventEmitter<string>();
@@ -42,7 +91,7 @@ export class StataTerminal implements vscode.Pseudoterminal {
     private varsUpdatedEmitter = new vscode.EventEmitter<{ obs: number; vars: number; filename: string; label: string }>();
     private resultsUpdatedEmitter = new vscode.EventEmitter<void>();
     private busyEmitter = new vscode.EventEmitter<boolean>();
-    private errorEmitter = new vscode.EventEmitter<string>();
+    private errorEmitter = new vscode.EventEmitter<StataErrorEvent>();
     private executionEmitter = new vscode.EventEmitter<'interactive' | 'programmatic'>();
 
     onDidWrite = this.writeEmitter.event;
@@ -56,576 +105,530 @@ export class StataTerminal implements vscode.Pseudoterminal {
     onDidStartExecution = this.executionEmitter.event;
 
     private backend: StataBackend;
-    private batchCallbacks = new Map<number, () => void>();
-    private lineBuffer = '';
+    private processor: OutputProcessor;
+    private editor = new LineEditor();
+    private accumulator = new InputAccumulator();
+
+    private batches = new Map<number, Batch>();
+    /** `done` events that arrived before `execute` returned the batch id. */
+    private earlyDone = new Set<number>();
     private history: string[] = [];
     private historyIndex = -1;
     private savedLine = '';
     private isOpen = false;
-    private pendingCode: { code: string; dir?: string } | null = null;
-    private recentInteractiveCmds: string[] = [];
-    private suppressingInternal = false;
+    private closed = false;
+    private promptShown = false;
+    private pendingRuns: PendingRun[] = [];
+    private partialTimer: ReturnType<typeof setTimeout> | null = null;
 
     readonly tempDir: string;
     private tempCounter = 0;
     private graphPath: string;
-    private varsPath: string;
+    private browseHelper: string;
+    private postDoFile: string;
     private dirWatcher: fs.FSWatcher | null = null;
-    private graphDebounces = new Map<string, ReturnType<typeof setTimeout>>();
-    private hadInlineGraphExport = false;
-    private varsDebounce: ReturnType<typeof setTimeout> | null = null;
-    private lastGraphMtime = 0;
-    private lastVarsMtime = 0;
+    private graphDebounce: ReturnType<typeof setTimeout> | null = null;
+    private emittedCaptures = new Set<string>();
+    private captureHashes = new Map<number, string>();
+    private lastFallbackMtime = 0;
+    private lastBrowseCsv = '';
 
     constructor(backend: StataBackend) {
         this.backend = backend;
-        this.cleanupOldSessions();
-        this.tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stata-vsc-'));
+        cleanupStaleSessions();
+        this.tempDir = createSessionDir();
         this.graphPath = path.join(this.tempDir, '_graph.png');
-        this.varsPath = path.join(this.tempDir, '_vars.tsv');
-        this.writePostDoFile();
-    }
+        this.browseHelper = path.join(this.tempDir, '_browse.do');
+        this.postDoFile = path.join(this.tempDir, '_post.do');
+        fs.writeFileSync(this.browseHelper, buildBrowseHelper(this.tempDir), 'utf-8');
+        fs.writeFileSync(this.postDoFile, buildPostDoFile({
+            meta: path.join(this.tempDir, '_meta.txt'),
+            vars: path.join(this.tempDir, '_vars.tsv'),
+            results: path.join(this.tempDir, '_results.tsv'),
+            graph: this.graphPath,
+            graphSig: path.join(this.tempDir, '_graph.sig'),
+        }), 'utf-8');
 
-    /** Create the post-execution do-file: graph + metadata + variables + results.
-     *  Runs via `run` (completely silent). */
-    private writePostDoFile(): void {
-        const postDoFile = path.join(this.tempDir, '_post.do');
-        const metaPath = toStataPath(path.join(this.tempDir, '_meta.txt'));
-        const resultsPath = toStataPath(path.join(this.tempDir, '_results.tsv'));
-        const graphPath = toStataPath(this.graphPath);
-        const varsPath = toStataPath(this.varsPath);
-        const code = [
-            // Fallback graph export — catches graphs from nested do-files
-            // (inline injection only works for directly-run code)
-            `capture graph export "${graphPath}", as(png) width(800) replace`,
-
-            // 1. Dataset metadata
-            `capture file close _vsc_mh`,
-            `local _vsc_obs = _N`,
-            `local _vsc_k = c(k)`,
-            `local _vsc_fn = c(filename)`,
-            `local _vsc_dl : data label`,
-            `capture file open _vsc_mh using "${metaPath}", write replace`,
-            'capture file write _vsc_mh "`_vsc_obs\'" _tab "`_vsc_k\'" _tab "`_vsc_fn\'" _tab "`_vsc_dl\'"',
-            `capture file close _vsc_mh`,
-
-            // 3. Variable list
-            `capture file close _vsc_fh`,
-            `capture file open _vsc_fh using "${varsPath}", write replace`,
-            `file write _vsc_fh "name" _tab "type" _tab "format" _tab "label" _n`,
-            `capture ds`,
-            `if _rc == 0 & "\`r(varlist)'" != "" {`,
-            `    foreach v of varlist \`r(varlist)' {`,
-            `        local _t : type \`v'`,
-            `        local _f : format \`v'`,
-            `        local _l : variable label \`v'`,
-            `        file write _vsc_fh "\`v'" _tab "\`_t'" _tab "\`_f'" _tab "\`_l'" _n`,
-            `    }`,
-            `}`,
-            `capture file close _vsc_fh`,
-
-            // 4. Stored estimation results (e() scalars + macros)
-            `capture file close _vsc_rh`,
-            `capture file open _vsc_rh using "${resultsPath}", write replace`,
-            `capture file write _vsc_rh "type" _tab "name" _tab "value" _n`,
-            `capture {`,
-            `    local _elist : e(scalars)`,
-            `    foreach s of local _elist {`,
-            '        file write _vsc_rh "e" _tab "`s\'" _tab (e(`s\')) _n',
-            `    }`,
-            `}`,
-            `capture {`,
-            `    local _mlist : e(macros)`,
-            `    foreach s of local _mlist {`,
-            '        local _mv `e(`s\')\' ',
-            '        file write _vsc_rh "em" _tab "`s\'" _tab "`_mv\'" _n',
-            `    }`,
-            `}`,
-            `capture file close _vsc_rh`,
-        ].join('\n');
-        fs.writeFileSync(postDoFile, code, 'utf-8');
-    }
-
-    private cleanupOldSessions(): void {
-        try {
-            const tmpBase = os.tmpdir();
-            for (const entry of fs.readdirSync(tmpBase)) {
-                if (entry.startsWith('stata-vsc-')) {
-                    const fullPath = path.join(tmpBase, entry);
-                    try {
-                        for (const f of fs.readdirSync(fullPath)) {
-                            fs.unlinkSync(path.join(fullPath, f));
-                        }
-                        fs.rmdirSync(fullPath);
-                    } catch { /* skip */ }
-                }
-            }
-        } catch { /* ignore */ }
+        this.processor = new OutputProcessor({
+            palette: C,
+            internalMarkers: [stataPathText(this.tempDir)],
+            onError: (message) => {
+                const first = this.batches.values().next().value as Batch | undefined;
+                this.errorEmitter.fire({
+                    message,
+                    origin: first?.origin ?? 'interactive',
+                    target: first?.target,
+                });
+            },
+        });
     }
 
     open(): void {
         this.isOpen = true;
         C = loadColors(); // pick up any settings changes
+        this.processor.setPalette(C);
 
+        const run = IS_MAC ? '⌘⇧D' : 'Ctrl+Shift+D';
+        const clear = IS_MAC ? '⌘L' : 'Ctrl+L';
+        const brk = IS_MAC ? '⌃C' : 'Ctrl+C';
         this.out(
             `\r\n` +
             `${C.cmd}  ___  ____  ____  ____  ____ \xAE${C.reset}\r\n` +
             `${C.cmd} /__    /   ____/   /   ____/${C.reset}\r\n` +
             `${C.cmd} ___/   /   /___/   /   /___/${C.reset}   ${C.bold}Stata Console${C.reset}\r\n` +
             `\r\n` +
-            `${C.dim} ${IS_MAC ? '\u2318\u21E7D' : 'Ctrl+Shift+D'}   Run do-file / selection\r\n` +
-            ` ${IS_MAC ? '\u2318\u21A9' : 'Shift+Enter'}    Run current line\r\n` +
-            ` ${IS_MAC ? '\u2318L' : 'Ctrl+L'}    Clear console\r\n` +
-            ` ${IS_MAC ? '\u2303C' : 'Ctrl+C'}    Break${C.reset}\r\n\r\n`
+            `${C.dim} ${run}   Run do-file / selection\r\n` +
+            ` Shift+Enter    Run current line\r\n` +
+            ` ${clear}    Clear console\r\n` +
+            ` ${brk}    Break${C.reset}\r\n\r\n`
         );
 
-        this.backend.on('output', (data: string) => {
-            this.handleOutput(data, false);
-        });
+        this.backend.on('output', (data: string) => this.handleOutput(data));
 
-        this.backend.on('stderr', (data: string) => {
-            this.handleOutput(data, true);
-        });
+        this.backend.on('stderr', (data: string) => this.write(this.processor.writeStderr(data)));
 
-        this.backend.on('done', (batchId: number) => {
-            const callback = this.batchCallbacks.get(batchId);
-            this.batchCallbacks.delete(batchId);
-            if (callback) {
-                callback();
-            }
-            if (this.batchCallbacks.size === 0) {
-                this.busyEmitter.fire(false);
-            }
-            this.showPrompt();
-        });
+        this.backend.on('done', (batchId: number) => this.handleDone(batchId));
 
         this.backend.on('ready', () => {
-            if (this.pendingCode !== null) {
-                const { code, dir } = this.pendingCode;
-                this.pendingCode = null;
-                this.doSendCode(code, dir);
-            } else {
+            if (this.batches.size === 0) {
                 this.showPrompt();
             }
         });
 
         this.backend.on('exit', (code: number | null) => {
+            this.flushPartial();
+            this.abandonBatches();
             this.out(`\r\n${C.dim}Stata exited (code ${code ?? '?'})${C.reset}\r\n`);
             this.closeEmitter.fire();
         });
 
         this.backend.on('error', (err: Error) => {
+            this.beginOutput();
             this.out(`\r\n${C.err}${err.message}${C.reset}\r\n`);
+            if (!this.backend.isRunning()) {
+                // Nothing will ever complete these batches.
+                this.abandonBatches();
+                this.showPrompt();
+            }
         });
 
-        // Watch for graph and vars files — fires instantly when written
-        this.startFileWatchers();
+        this.startGraphWatcher();
 
         const workspaceDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         this.out(`${C.dim}${this.backend.label}${C.reset}\r\n`);
         this.backend.start(workspaceDir || os.homedir());
+
+        for (const run of this.pendingRuns.splice(0)) {
+            this.doSendCode(run.code, run.workingDir, run.target);
+        }
     }
 
+    /** Called by VS Code when the terminal is closed. */
     close(): void {
-        this.backend.dispose();
-        this.cleanupTempDir();
+        this.shutdown();
     }
 
     // --- Interactive keyboard input ---
 
     handleInput(data: string): void {
-        if (data === '\x03') {
-            this.backend.interrupt();
-            this.lineBuffer = '';
-            this.out('^C\r\n');
-            return;
-        }
-
-        if (data === '\r') {
-            this.out('\r\n');
-            const command = this.lineBuffer;
-            this.lineBuffer = '';
-            this.historyIndex = -1;
-            this.savedLine = '';
-
-            if (command.trim().length > 0) {
-                if (this.history.length === 0 || this.history[this.history.length - 1] !== command.trim()) {
-                    this.history.push(command.trim());
-                    if (this.history.length > 1000) { this.history.shift(); }
-                }
-
-                // Intercept browse/edit — not available in console mode
-                const browseMatch = command.trim().match(BROWSE_RE);
-                if (browseMatch) {
-                    this.executionEmitter.fire('interactive');
-                    this.handleBrowse(browseMatch[2]?.trim() || '');
-                    return;
-                }
-
-                const cleaned = this.stripInlineComments(command);
-                this.recentInteractiveCmds.push(cleaned.trim());
-                this.executionEmitter.fire('interactive');
-                this.runBatch([cleaned]);
-            } else {
-                this.showPrompt();
-            }
-            return;
-        }
-
-        if (data === '\x7f') {
-            if (this.lineBuffer.length > 0) {
-                this.lineBuffer = this.lineBuffer.slice(0, -1);
-                this.out('\b \b');
-            }
-            return;
-        }
-
-        if (data === '\x1b[A') { this.navigateHistory(1); return; }
-        if (data === '\x1b[B') { this.navigateHistory(-1); return; }
-        if (data === '\x1b[C' || data === '\x1b[D') { return; }
-
-        this.lineBuffer += data;
-        this.out(data);
+        if (this.closed) { return; }
+        const events = parseInput(data);
+        events.forEach((event, i) => this.handleEvent(event, i < events.length - 1));
     }
 
-    // --- Browse (interactive only) ---
+    private handleEvent(event: InputEvent, moreFollows: boolean): void {
+        if (event.type === 'text') {
+            this.out(this.editor.insert(event.text));
+            return;
+        }
+        switch (event.key) {
+            case 'interrupt': return this.interrupt();
+            case 'enter': return this.submitLine(moreFollows);
+            case 'backspace': return this.out(this.editor.backspace());
+            case 'delete': return this.out(this.editor.delete());
+            case 'left': return this.out(this.editor.left());
+            case 'right': return this.out(this.editor.right());
+            case 'home': return this.out(this.editor.home());
+            case 'end': return this.out(this.editor.end());
+            case 'kill-line': return this.out(this.editor.killLine());
+            case 'kill-to-end': return this.out(this.editor.killToEnd());
+            case 'kill-word': return this.out(this.editor.killWord());
+            case 'up': return this.navigateHistory(1);
+            case 'down': return this.navigateHistory(-1);
+        }
+    }
 
-    handleBrowse(args: string): void {
-        this.out(`${C.dim}(opening Data Viewer...)${C.reset}\r\n`);
+    /** Ctrl+C: break the running command and abandon any half-typed input. */
+    interrupt(): void {
+        this.backend.interrupt();
+        this.editor.clear();
+        this.accumulator.reset();
+        this.historyIndex = -1;
+        this.promptShown = false;
+        this.out('^C\r\n');
+        if (this.batches.size === 0) {
+            this.showPrompt();
+        }
+    }
 
-        const csvPath = path.join(this.tempDir, '_browse.csv');
-        const countPath = path.join(this.tempDir, '_count.txt');
-        try { fs.unlinkSync(csvPath); } catch { /* ignore */ }
-        try { fs.unlinkSync(countPath); } catch { /* ignore */ }
+    private submitLine(moreFollows: boolean): void {
+        const text = this.editor.text;
+        this.editor.clear();
+        this.historyIndex = -1;
+        this.savedLine = '';
+        this.promptShown = false;
+        this.out('\r\n');
 
-        const exportArgs = args ? ' ' + args : '';
-        const browseDoFile = path.join(this.tempDir, '_browse.do');
-        const code = [
-            `capture file close _vsc_fh`,
-            `capture file open _vsc_fh using "${countPath}", write replace`,
-            `capture file write _vsc_fh (_N)`,
-            `capture file close _vsc_fh`,
-            `capture export delimited${exportArgs} using "${csvPath}", replace`,
-        ].join('\n');
-        fs.writeFileSync(browseDoFile, code, 'utf-8');
-        this.runBatch([`run "${toStataPath(browseDoFile)}"`], () => {
-            if (!fs.existsSync(csvPath)) {
-                this.browseEmitter.fire({ csvPath: '', totalObs: 0 });
-                return;
+        if (text.trim().length > 0 && this.history[this.history.length - 1] !== text.trim()) {
+            this.history.push(text.trim());
+            if (this.history.length > MAX_HISTORY) { this.history.shift(); }
+        }
+
+        const result = this.accumulator.push(text);
+        if (result === null) {
+            this.showContinuationPrompt();
+            return;
+        }
+
+        switch (result.kind) {
+            case 'empty':
+                break;
+            case 'rejected':
+                this.out(`${C.err}${result.message}${C.reset}\r\n`);
+                break;
+            case 'line': {
+                const browse = result.code.trim().match(BROWSE_RE);
+                this.executionEmitter.fire('interactive');
+                if (browse) {
+                    this.handleBrowse(this.stripComment(browse[2]));
+                } else {
+                    this.runInteractive([result.code], { cmd: result.code, lines: 1 });
+                }
+                break;
             }
-            let totalObs: number | undefined;
-            if (fs.existsSync(countPath)) {
-                totalObs = parseInt(fs.readFileSync(countPath, 'utf-8').trim(), 10) || undefined;
+            case 'block': {
+                this.executionEmitter.fire('interactive');
+                const id = ++this.tempCounter;
+                const file = path.join(this.tempDir, `_int_${id}.do`);
+                fs.writeFileSync(file, result.code + '\n', 'utf-8');
+                this.runInteractive([`do ${stataQuote(file)}`], { cmd: result.lines[0], lines: result.lines.length }, file);
+                break;
             }
-            this.browseEmitter.fire({ csvPath, totalObs });
+        }
+
+        if (this.batches.size === 0) {
+            this.showPrompt();
+        } else if (moreFollows) {
+            // Pasted text: show a prompt per line while the earlier lines run.
+            this.out(this.promptText());
+        }
+    }
+
+    private runInteractive(commands: string[], echo: { cmd: string; lines: number }, file?: string): void {
+        this.submit([...commands, `run ${stataQuote(this.postDoFile)}`], {
+            origin: 'interactive',
+            files: file ? [file] : [],
+            refreshState: true,
+            echoes: [echo],
         });
     }
 
+    private stripComment(text: string): string {
+        const i = text.search(/(?:^|\s)\/\//);
+        return (i === -1 ? text : text.slice(0, i)).trim();
+    }
+
+    // --- Browse ---
+
+    /** Export the data in memory for the Data Viewer. */
+    handleBrowse(args: string): void {
+        this.beginOutput();
+        this.out(`${C.dim}(opening Data Viewer...)${C.reset}\r\n`);
+        const base = `_browse_i${++this.tempCounter}`;
+        this.submit([`quietly run ${stataQuote(this.browseHelper)} ${this.browseLimit()} ${base} ${browseArgs(args)}`], {
+            origin: 'interactive',
+            files: [],
+            refreshState: false,
+            browseBase: base,
+            echoes: [],
+        });
+    }
+
+    private browseLimit(): number {
+        const limit = vscode.workspace.getConfiguration('stata').get<number>('browseRowLimit', 10000);
+        return Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 10000;
+    }
+
+    private emitBrowse(base: string): void {
+        const csvPath = path.join(this.tempDir, `${base}.csv`);
+        const countPath = path.join(this.tempDir, `${base}.count`);
+        let totalObs: number | undefined;
+        try {
+            totalObs = parseInt(fs.readFileSync(countPath, 'utf-8').trim(), 10);
+            if (!Number.isFinite(totalObs)) { totalObs = undefined; }
+        } catch { /* no count file: the export failed and Stata printed why */ }
+
+        if (fs.existsSync(csvPath)) {
+            if (this.lastBrowseCsv && this.lastBrowseCsv !== csvPath) {
+                try { fs.unlinkSync(this.lastBrowseCsv); } catch { /* ignore */ }
+            }
+            this.lastBrowseCsv = csvPath;
+            this.browseEmitter.fire({ csvPath, totalObs });
+        } else if (totalObs === 0) {
+            this.browseEmitter.fire({ csvPath: '', totalObs: 0 });
+        }
+    }
+
+    // --- Batches ---
+
     /** Submit commands to the backend, tracking busy state until `done`. */
-    private runBatch(commands: string[], onDone?: () => void): void {
-        this.busyEmitter.fire(true);
-        const id = this.backend.execute(commands);
-        this.batchCallbacks.set(id, onDone ?? (() => { /* none */ }));
+    private submit(commands: string[], batch: Batch): number {
+        const wasIdle = this.batches.size === 0;
+        this.beginOutput();
+        let id: number;
+        try {
+            id = this.backend.execute(commands);
+        } catch (err) {
+            this.out(`${C.err}${(err as Error).message}${C.reset}\r\n`);
+            this.cleanupFiles(batch.files);
+            return -1;
+        }
+        if (!this.backend.isRunning()) {
+            // The backend reported an error instead of accepting the batch.
+            this.cleanupFiles(batch.files);
+            return -1;
+        }
+        for (const echo of batch.echoes) {
+            this.processor.expectEcho(id, echo.cmd, echo.lines);
+        }
+        if (this.earlyDone.delete(id)) {
+            this.finishBatch(id, batch, wasIdle);
+            return id;
+        }
+        this.batches.set(id, batch);
+        if (wasIdle) { this.busyEmitter.fire(true); }
+        return id;
+    }
+
+    private handleDone(batchId: number): void {
+        const batch = this.batches.get(batchId);
+        if (!batch) {
+            this.earlyDone.add(batchId);
+            return;
+        }
+        this.batches.delete(batchId);
+        this.finishBatch(batchId, batch, false);
+    }
+
+    private finishBatch(batchId: number, batch: Batch, neverBusy: boolean): void {
+        this.flushPartial();
+        this.processor.batchDone(batchId);
+
+        this.sweepGraphs(true, batch.runId);
+        if (batch.refreshState) {
+            this.varsUpdatedEmitter.fire(this.readMeta());
+            this.resultsUpdatedEmitter.fire();
+        }
+        if (batch.browseBase) {
+            this.emitBrowse(batch.browseBase);
+        }
+        this.cleanupFiles(batch.files);
+
+        if (this.batches.size === 0) {
+            if (!neverBusy) { this.busyEmitter.fire(false); }
+            this.showPrompt();
+        }
+    }
+
+    /** The backend is gone: no outstanding batch can complete. */
+    private abandonBatches(): void {
+        const wasBusy = this.batches.size > 0;
+        for (const batch of this.batches.values()) { this.cleanupFiles(batch.files); }
+        this.batches.clear();
+        this.earlyDone.clear();
+        this.processor.reset();
+        if (wasBusy) { this.busyEmitter.fire(false); }
+    }
+
+    private cleanupFiles(files: string[]): void {
+        for (const f of files) {
+            try { fs.unlinkSync(f); } catch { /* ignore */ }
+        }
     }
 
     // --- Programmatic code execution ---
 
-    sendCode(code: string, workingDir?: string): void {
+    sendCode(code: string, workingDir?: string, target?: RunTarget): void {
+        if (this.closed) { return; }
         if (!this.isOpen) {
-            this.pendingCode = { code, dir: workingDir };
+            this.pendingRuns.push({ code, workingDir, target });
             return;
         }
-        this.doSendCode(code, workingDir);
+        this.doSendCode(code, workingDir, target);
     }
 
-    private doSendCode(code: string, workingDir?: string): void {
+    private doSendCode(code: string, workingDir?: string, target?: RunTarget): void {
         this.executionEmitter.fire('programmatic');
-        this.recentInteractiveCmds = [];
-        this.lastGraphMtime = this.getFileMtime(this.graphPath);
-        this.lastVarsMtime = this.getFileMtime(this.varsPath);
 
-        // Delete old browse CSV so watcher can detect a new one
-        try { fs.unlinkSync(path.join(this.tempDir, '_browse.csv')); } catch { /* ignore */ }
+        const runId = ++this.tempCounter;
+        const rewritten = rewriteCode(code, {
+            dir: this.tempDir,
+            runId,
+            browseLimit: this.browseLimit(),
+            browseHelper: this.browseHelper,
+        });
+        const tempFile = path.join(this.tempDir, `_run_${runId}.do`);
+        fs.writeFileSync(tempFile, rewritten.code, 'utf-8');
 
-        // Process lines: replace browse/edit, inject graph export with unique filenames
-        const csvPath = toStataPath(path.join(this.tempDir, '_browse.csv'));
-        const countPath = toStataPath(path.join(this.tempDir, '_count.txt'));
-        const sourceLines = code.split(/\r?\n/);
-        const outputLines: string[] = [];
-        let inGraphCmd = false;
-        let graphNum = 0;
-
-        for (const line of sourceLines) {
-            const trimmed = line.trim();
-
-            // Replace browse/edit with inline export (respects error-stop)
-            const browseMatch = trimmed.match(BROWSE_RE);
-            if (browseMatch) {
-                const exportArgs = browseMatch[2]?.trim() || '';
-                const exportCmd = exportArgs
-                    ? `capture export delimited ${exportArgs} using "${csvPath}", replace`
-                    : `capture export delimited using "${csvPath}", replace`;
-                outputLines.push(`* browse — opening in VS Code Data Viewer`);
-                outputLines.push(`capture file close _vsc_fh`);
-                outputLines.push(`capture file open _vsc_fh using "${countPath}", write replace`);
-                outputLines.push(`capture file write _vsc_fh (_N)`);
-                outputLines.push(`capture file close _vsc_fh`);
-                outputLines.push(exportCmd);
-                continue;
-            }
-
-            outputLines.push(line);
-
-            // Inject graph export with UNIQUE filename after each graph command.
-            // Unique names prevent debounce from collapsing multiple graphs.
-            const isContinuation = trimmed.endsWith('///');
-            if (!inGraphCmd && this.isGraphCommand(trimmed)) {
-                inGraphCmd = true;
-            }
-            if (inGraphCmd && !isContinuation) {
-                inGraphCmd = false;
-                graphNum++;
-                const plotFile = toStataPath(path.join(this.tempDir, `_cap_${this.tempCounter}_${graphNum}.png`));
-                outputLines.push(
-                    `capture quietly graph export "${plotFile}", as(png) width(800) replace`
-                );
-            }
-        }
-
-        // Track whether we injected inline graph exports — if so, skip _graph.png fallback
-        this.hadInlineGraphExport = graphNum > 0;
-
-        const tempFile = path.join(this.tempDir, `_run_${++this.tempCounter}.do`);
-
-        let fullCode = '';
+        // `do file` stops on error like Stata does; the post-run export is
+        // a separate command so it still runs after an error or break.
+        const commands: string[] = [];
+        const echoes: Batch['echoes'] = [];
         if (workingDir) {
-            fullCode += `cd "${toStataPath(workingDir)}"\n`;
+            const cd = `quietly cd ${stataQuote(workingDir)}`;
+            commands.push(cd);
+            echoes.push({ cmd: cd, lines: 1 });
         }
-        fullCode += outputLines.join('\n') + '\n';
+        commands.push(`do ${stataQuote(tempFile)}`, `run ${stataQuote(this.postDoFile)}`);
 
-        fs.writeFileSync(tempFile, fullCode, 'utf-8');
-        // `do file` stops on error by default. `do file, nostop` would continue.
-        // Using plain `do` ensures Stata-like error behavior.
-        // Then silently run the variable/metadata/results export.
-        const postDoFile = path.join(this.tempDir, '_post.do');
-        this.runBatch([`do "${toStataPath(tempFile)}"`, `run "${toStataPath(postDoFile)}"`]);
+        this.submit(commands, {
+            origin: 'programmatic',
+            target,
+            files: [tempFile],
+            refreshState: true,
+            runId,
+            browseBase: rewritten.browseBase,
+            echoes,
+        });
 
-        for (const line of code.split(/\r?\n/)) {
-            const t = line.trim();
-            if (t && !t.startsWith('*') && !t.startsWith('//')) {
-                if (this.history.length === 0 || this.history[this.history.length - 1] !== t) {
-                    this.history.push(t);
-                }
+        const meaningful = code.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('*') && !l.startsWith('//'));
+        if (meaningful.length <= MAX_PROGRAMMATIC_HISTORY_LINES) {
+            for (const t of meaningful) {
+                if (this.history[this.history.length - 1] !== t) { this.history.push(t); }
             }
+            if (this.history.length > MAX_HISTORY) { this.history.splice(0, this.history.length - MAX_HISTORY); }
         }
         this.historyIndex = -1;
     }
 
     // --- Output handling ---
 
-    private handleOutput(data: string, isStderr: boolean): void {
-        const text = data.replace(/\r?\n/g, '\r\n');
+    private handleOutput(data: string): void {
+        this.write(this.processor.write(data));
+        // Prompts and `--more--` arrive without a newline; flush them if nothing follows.
+        if (this.partialTimer) { clearTimeout(this.partialTimer); }
+        this.partialTimer = setTimeout(() => {
+            this.partialTimer = null;
+            this.flushPartial();
+        }, PARTIAL_LINE_MS);
+    }
 
-        if (isStderr) {
-            this.out(`${C.err}${text}${C.reset}`);
-        } else {
-            this.out(this.colorize(text));
+    private flushPartial(): void {
+        if (this.partialTimer) {
+            clearTimeout(this.partialTimer);
+            this.partialTimer = null;
+        }
+        this.write(this.processor.flushPending());
+    }
+
+    /** Write Stata output, first wiping a prompt left on the current line. */
+    private write(text: string): void {
+        if (!text) { return; }
+        this.beginOutput();
+        this.out(text);
+    }
+
+    /** Output is about to be written: wipe a prompt left on the current line. */
+    private beginOutput(): void {
+        if (this.promptShown) {
+            this.promptShown = false;
+            this.out('\r\x1b[2K');
         }
     }
 
-    private colorize(text: string): string {
-        const lines = text.split('\r\n');
-        const result: string[] = [];
-        let inError = false;
+    // --- Graph capture ---
 
-        for (const line of lines) {
-            const stripped = line.trimStart();
-
-            // --- Filter internal extension noise ---
-            // Use path-based patterns (temp dir name) rather than broad substrings
-            if (line.includes('stata-vsc-') ||
-                line.includes('capture quietly graph export') ||
-                /^\. run "/.test(stripped)) {
-                this.suppressingInternal = true;
-                continue;
-            }
-
-            if (this.suppressingInternal && /^> /.test(stripped)) {
-                continue;
-            }
-
-            if (stripped === 'end of do-file') {
-                continue;
-            }
-
-            if (this.suppressingInternal && !/^> /.test(stripped)) {
-                this.suppressingInternal = false;
-            }
-
-            // Suppress Stata's re-echo of interactively typed commands
-            if (/^\. /.test(stripped) && this.recentInteractiveCmds.length > 0) {
-                const echoedCmd = stripped.substring(2).trim();
-                const idx = this.recentInteractiveCmds.indexOf(echoedCmd);
-                if (idx !== -1) {
-                    this.recentInteractiveCmds.splice(idx, 1);
-                    continue;
-                }
-            }
-
-            // --- Colorize ---
-
-            // Error codes: r(123);
-            if (/^r\(\d+\);/.test(stripped)) {
-                result.push(`${C.err}${line}${C.reset}`);
-                // Emit error: collect preceding error lines as the message
-                const errorLines: string[] = [];
-                for (let j = result.length - 2; j >= 0; j--) {
-                    const raw = result[j].replace(ANSI_ESCAPE_RE, '').trim();
-                    if (!raw) { break; }
-                    errorLines.unshift(raw);
-                }
-                errorLines.push(stripped);
-                this.errorEmitter.fire(errorLines.join('\n'));
-                inError = false;
-                continue;
-            }
-
-            // Continuation of error block
-            if (inError) {
-                result.push(`${C.errBg}${line}${C.reset}`);
-                if (/^r\(\d+\);/.test(stripped)) { inError = false; }
-                continue;
-            }
-
-            // Error preamble keywords
-            if (/^(invalid |unrecognized |unknown |command .* is unrecognized|variable .* not found|no variables defined|option .* not allowed|type mismatch|last estimates not found|no observations|not possible|too few|too many|may not|does not|cannot )/.test(stripped)) {
-                result.push(`${C.err}${line}${C.reset}`);
-                inError = true;
-                continue;
-            }
-
-            // Table separator lines (---+--- or ===+===)
-            if (/^[-=+|]+$/.test(stripped) || /^[-]+\+[-]+/.test(stripped)) {
-                result.push(`${C.table}${line}${C.reset}`);
-                continue;
-            }
-
-            // Echoed commands: ". command"
-            if (/^\. /.test(stripped) || stripped === '.') {
-                result.push(`${C.cmd}${line}${C.reset}`);
-                continue;
-            }
-
-            if (/^> /.test(stripped)) {
-                result.push(`${C.cmd}${line}${C.reset}`);
-                continue;
-            }
-
-            result.push(line);
-        }
-
-        return result.join('\r\n');
-    }
-
-    // --- File watchers for instant detection ---
-
-    private startFileWatchers(): void {
-        // Watch the temp directory — detects when _graph.png or _vars.tsv are written
+    private startGraphWatcher(): void {
+        // Events are only a hint: the file name can be missing (Windows) and
+        // events can repeat, so each debounced event rescans the directory.
         try {
-            this.dirWatcher = fs.watch(this.tempDir, (_event, filename) => {
-                if (!filename) { return; }
-
-                // Detect graph PNG files: _cap_*.png (inline) or _graph.png (fallback only)
-                const isInlineCapture = filename?.startsWith('_cap_');
-                const isFallback = filename === '_graph.png' && !this.hadInlineGraphExport;
-                if (isInlineCapture || isFallback) {
-                    // Per-file debounce — each graph gets its own timer
-                    const key = filename;
-                    const existing = this.graphDebounces.get(key);
-                    if (existing) { clearTimeout(existing); }
-                    this.graphDebounces.set(key, setTimeout(() => {
-                        this.graphDebounces.delete(key);
-                        const filePath = path.join(this.tempDir, key);
-                        try {
-                            const stat = fs.statSync(filePath);
-                            if (stat.size > 100) {
-                                this.graphEmitter.fire(filePath);
-                            }
-                        } catch { /* ignore */ }
-                    }, 300));
-                }
-
-                if (filename === '_vars.tsv') {
-                    if (this.varsDebounce) { clearTimeout(this.varsDebounce); }
-                    this.varsDebounce = setTimeout(() => {
-                        this.varsDebounce = null;
-                        const mtime = this.getFileMtime(this.varsPath);
-                        if (mtime > this.lastVarsMtime) {
-                            this.lastVarsMtime = mtime;
-                            const meta = this.readMeta();
-                            this.varsUpdatedEmitter.fire(meta);
-                        }
-                    }, 50);
-                }
-
-                if (filename === '_results.tsv') {
-                    setTimeout(() => {
-                        this.resultsUpdatedEmitter.fire();
-                    }, 50);
-                }
-
-                // Browse CSV written by inline export in do-file
-                if (filename === '_browse.csv') {
-                    setTimeout(() => {
-                        const browseCsv = path.join(this.tempDir, '_browse.csv');
-                        const browseCount = path.join(this.tempDir, '_count.txt');
-                        if (fs.existsSync(browseCsv)) {
-                            let totalObs: number | undefined;
-                            try {
-                                if (fs.existsSync(browseCount)) {
-                                    totalObs = parseInt(fs.readFileSync(browseCount, 'utf-8').trim(), 10) || undefined;
-                                }
-                            } catch { /* ignore */ }
-                            this.browseEmitter.fire({ csvPath: browseCsv, totalObs });
-                        }
-                    }, 100);
-                }
+            this.dirWatcher = fs.watch(this.tempDir, () => {
+                if (this.graphDebounce) { clearTimeout(this.graphDebounce); }
+                this.graphDebounce = setTimeout(() => {
+                    this.graphDebounce = null;
+                    this.sweepGraphs(false);
+                }, GRAPH_DEBOUNCE_MS);
             });
-        } catch { /* ignore — watchers are best-effort */ }
+            this.dirWatcher.on('error', () => { /* best-effort */ });
+        } catch { /* ignore — graphs are still picked up when a batch finishes */ }
     }
 
-    private getFileMtime(filePath: string): number {
-        try { return fs.statSync(filePath).mtimeMs; } catch { return 0; }
+    /**
+     * Emit new plots: inline captures (`_cap_<run>_<n>.png`) in order, then,
+     * once a batch is finished, the fallback export of the current graph.
+     */
+    private sweepGraphs(final: boolean, runId?: number): void {
+        let names: string[];
+        try { names = fs.readdirSync(this.tempDir); } catch { return; }
+
+        const captures = names
+            .map((name) => ({ name, m: name.match(/^_cap_(\d+)_(\d+)\.png$/) }))
+            .filter((c): c is { name: string; m: RegExpMatchArray } => c.m !== null && !this.emittedCaptures.has(c.name))
+            .sort((a, b) => Number(a.m[1]) - Number(b.m[1]) || Number(a.m[2]) - Number(b.m[2]));
+
+        let unsettled = false;
+        for (const { name, m } of captures) {
+            const file = path.join(this.tempDir, name);
+            let stat: fs.Stats;
+            try { stat = fs.statSync(file); } catch { continue; }
+            if (stat.size <= 100) { continue; }
+            if (!final && Date.now() - stat.mtimeMs < 150) {
+                unsettled = true; // possibly still being written
+                break;
+            }
+            this.emittedCaptures.add(name);
+            const hash = this.hashFile(file);
+            if (hash) { this.captureHashes.set(Number(m[1]), hash); }
+            this.graphEmitter.fire(file);
+        }
+        if (unsettled) {
+            if (this.graphDebounce) { clearTimeout(this.graphDebounce); }
+            this.graphDebounce = setTimeout(() => {
+                this.graphDebounce = null;
+                this.sweepGraphs(false);
+            }, GRAPH_DEBOUNCE_MS);
+        }
+
+        if (!final) { return; }
+        let stat: fs.Stats;
+        try { stat = fs.statSync(this.graphPath); } catch { return; }
+        if (stat.size <= 100 || stat.mtimeMs === this.lastFallbackMtime) { return; }
+        this.lastFallbackMtime = stat.mtimeMs;
+        // The graph an inline capture of this same run already showed is not new.
+        const hash = this.hashFile(this.graphPath);
+        if (runId !== undefined && hash && hash === this.captureHashes.get(runId)) { return; }
+        this.graphEmitter.fire(this.graphPath);
+    }
+
+    private hashFile(file: string): string | undefined {
+        try {
+            return crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex');
+        } catch {
+            return undefined;
+        }
     }
 
     private readMeta(): { obs: number; vars: number; filename: string; label: string } {
-        const metaPath = path.join(this.tempDir, '_meta.txt');
         let obs = 0, vars = 0, filename = '', label = '';
         try {
-            if (fs.existsSync(metaPath)) {
-                const content = fs.readFileSync(metaPath, 'utf-8').trim();
-                const parts = content.split('\t');
-                obs = parseInt(parts[0], 10) || 0;
-                vars = parseInt(parts[1], 10) || 0;
-                filename = (parts[2] || '').replace(/^"|"$/g, '');
-                label = (parts[3] || '').replace(/^"|"$/g, '');
-            }
+            const content = fs.readFileSync(path.join(this.tempDir, '_meta.txt'), 'utf-8').replace(/\r?\n$/, '');
+            const parts = content.split('\t');
+            obs = parseInt(parts[0], 10) || 0;
+            vars = parseInt(parts[1], 10) || 0;
+            filename = (parts[2] || '').trim();
+            label = (parts[3] || '').trim();
         } catch { /* ignore */ }
         return { obs, vars, filename, label };
-    }
-
-    /** Check if a line starts a graph-producing Stata command */
-    private isGraphCommand(line: string): boolean {
-        // Strip leading dot (echoed commands) and whitespace
-        const s = line.replace(/^\.\s*/, '').trim().toLowerCase();
-        if (!s || s.startsWith('*') || s.startsWith('//')) { return false; }
-
-        // Graph subcommands that DON'T produce plots
-        if (/^graph\s+(export|save|describe|dir|drop|rename|display|query|set|use)\b/.test(s)) {
-            return false;
-        }
-
-        return /^(scatter|histogram|hist|kdensity|twoway|tw|graph\s+(bar|box|pie|dot|hbar|combine|matrix|twoway)|coefplot|binscatter|marginsplot|sts\s+graph|stcurve|qnorm|pnorm|qqplot|gladder|lowess|lpoly)\b/.test(s);
     }
 
     // --- History navigation ---
@@ -633,73 +636,75 @@ export class StataTerminal implements vscode.Pseudoterminal {
     private navigateHistory(direction: number): void {
         if (this.history.length === 0) { return; }
         if (this.historyIndex === -1 && direction === 1) {
-            this.savedLine = this.lineBuffer;
+            this.savedLine = this.editor.text;
         }
         const next = this.historyIndex + direction;
         if (direction === 1 && next >= this.history.length) { return; }
         if (direction === -1 && next < -1) { return; }
         this.historyIndex = next;
-        this.out('\r\x1b[K');
-        this.out(`${C.prompt}. ${C.reset}`);
-        this.lineBuffer = this.historyIndex === -1
+        this.out(this.editor.set(this.historyIndex === -1
             ? this.savedLine
-            : this.history[this.history.length - 1 - this.historyIndex];
-        this.out(this.lineBuffer);
+            : this.history[this.history.length - 1 - this.historyIndex]));
     }
 
-    // --- Helpers ---
+    // --- Prompt ---
 
-    private stripInlineComments(cmd: string): string {
-        const trimmed = cmd.trim();
-        if (trimmed.startsWith('*') || trimmed.startsWith('//')) {
-            return '';
+    /** Stata-style prompt: `. ` normally, `  2. ` inside a brace block, `> ` otherwise. */
+    private promptText(): string {
+        let text = '. ';
+        if (this.accumulator.pending) {
+            const { lineNumber, kind } = this.accumulator.continuation;
+            text = kind === 'brace' ? `${String(lineNumber).padStart(3)}. ` : '> ';
         }
-        let inQuote = false;
-        let qChar = '';
-        for (let i = 0; i < cmd.length - 1; i++) {
-            const ch = cmd[i];
-            if (!inQuote && (ch === '"' || ch === '`')) {
-                inQuote = true;
-                qChar = ch === '`' ? "'" : '"';
-            } else if (inQuote && ch === qChar) {
-                inQuote = false;
-            } else if (!inQuote && ch === '/' && cmd[i + 1] === '/') {
-                return cmd.substring(0, i).trimEnd();
-            }
-        }
-        return cmd;
+        this.editor.prompt = `${C.prompt}${text}${C.reset}`;
+        return this.editor.prompt;
+    }
+
+    private showPrompt(): void {
+        if (this.closed || this.promptShown) { return; }
+        this.promptShown = true;
+        this.out(this.processor.midLine ? '\r\n\r\n' : '\r\n');
+        this.promptText();
+        this.out(this.editor.redraw());
+    }
+
+    private showContinuationPrompt(): void {
+        this.promptShown = true;
+        this.out(this.promptText());
     }
 
     clearScreen(): void {
         // ANSI: clear entire screen + move cursor to top-left
         this.out('\x1b[2J\x1b[H');
-        this.showPrompt();
-    }
-
-    private showPrompt(): void {
-        this.out(`\r\n${C.prompt}. ${C.reset}`);
+        this.promptShown = false;
+        if (this.batches.size === 0) {
+            this.showPrompt();
+        }
     }
 
     private out(text: string): void {
-        this.writeEmitter.fire(text);
+        if (text && !this.closed) { this.writeEmitter.fire(text); }
     }
 
-    private cleanupTempDir(): void {
-        try {
-            for (const f of fs.readdirSync(this.tempDir)) {
-                fs.unlinkSync(path.join(this.tempDir, f));
-            }
-            fs.rmdirSync(this.tempDir);
-        } catch { /* ignore */ }
+    // --- Teardown ---
+
+    private shutdown(): void {
+        if (this.closed) { return; }
+        this.closed = true;
+        this.dirWatcher?.close();
+        this.dirWatcher = null;
+        if (this.graphDebounce) { clearTimeout(this.graphDebounce); }
+        if (this.partialTimer) { clearTimeout(this.partialTimer); }
+        const wasBusy = this.batches.size > 0;
+        this.batches.clear();
+        this.pendingRuns = [];
+        this.backend.dispose();
+        removeSessionDir(this.tempDir);
+        if (wasBusy) { this.busyEmitter.fire(false); }
     }
 
     dispose(): void {
-        this.dirWatcher?.close();
-        this.graphDebounces.forEach(t => clearTimeout(t));
-        this.graphDebounces.clear();
-        if (this.varsDebounce) { clearTimeout(this.varsDebounce); }
-        this.backend.dispose();
-        this.cleanupTempDir();
+        this.shutdown();
         this.writeEmitter.dispose();
         this.closeEmitter.dispose();
         this.graphEmitter.dispose();
