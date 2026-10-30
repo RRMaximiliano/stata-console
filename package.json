@@ -213,8 +213,8 @@
     "keybindings": [
       {
         "command": "stata.run",
-        "key": "ctrl+k ctrl+enter",
-        "mac": "cmd+k cmd+enter",
+        "key": "ctrl+shift+d",
+        "mac": "cmd+shift+d",
         "when": "editorTextFocus && editorLangId == stata && resourceExtname != .sthlp"
       },
       {

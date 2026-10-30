@@ -49,7 +49,7 @@ test('bindings are language scoped and ordinary terminal Ctrl+L remains availabl
     const bindings = manifest.contributes.keybindings;
     assert.ok(bindings.some(binding => binding.command === 'stata.runSelection' && binding.key === 'ctrl+enter' && binding.mac === 'cmd+enter'));
     assert.ok(bindings.some(binding => binding.command === 'stata.runSelection' && binding.key === 'shift+enter'));
-    assert.equal(bindings.some(binding => binding.key === 'ctrl+shift+d' || binding.key === 'ctrl+d'), false);
+    assert.ok(bindings.some(binding => binding.command === 'stata.run' && binding.key === 'ctrl+shift+d' && binding.mac === 'cmd+shift+d'));
     const clear = bindings.find(binding => binding.command === 'stata.clearConsole');
     assert.match(clear.when, /terminalFocus && stata.consoleActive/);
     assert.notEqual(clear.key, 'ctrl+l');
