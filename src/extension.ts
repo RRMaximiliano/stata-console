@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { StataTerminal } from './stataTerminal';
+import { StataTerminal, type RunTarget, type StataErrorEvent } from './stataTerminal';
 import { GraphPanel } from './graphPanel';
 import { DataPanel } from './dataPanel';
 import { VariablesPanel } from './variablesPanel';
@@ -13,7 +13,7 @@ import { StataLinkProvider } from './linkProvider';
 import { StataOutlineProvider } from './outlineProvider';
 import { StataDefinitionProvider } from './definitionProvider';
 import { getStataPathDiagnostics, resolveBackend } from './config';
-import { toStataPath } from './backend';
+import { stataQuote } from './stataCode';
 import { registerSthlpViewer } from './sthlpViewer';
 
 let stataTerminal: StataTerminal | undefined;
@@ -24,7 +24,6 @@ let statusBarItem: vscode.StatusBarItem;
 let busyStatusItem: vscode.StatusBarItem;
 let diagnosticCollection: vscode.DiagnosticCollection;
 let outputChannel: vscode.OutputChannel;
-let lastRunTarget: { uri: vscode.Uri; line: number } | undefined;
 
 // Sidebar panels (created once in activate, persist across terminal sessions)
 let datasetPanel: DatasetPanel;
@@ -73,71 +72,99 @@ async function showPathDiagnostics(): Promise<void> {
     }
 }
 
-function recordRunTarget(editor: vscode.TextEditor, line: number): void {
-    lastRunTarget = {
+function selectionTarget(editor: vscode.TextEditor): RunTarget {
+    return {
         uri: editor.document.uri,
-        line,
+        line: editor.selection.start.line,
+        from: editor.selection.start.line,
+        to: editor.selection.end.line,
     };
 }
 
-function findTargetLine(doc: vscode.TextDocument, errorLines: string[], fallbackLine: number): number {
+function lineTarget(editor: vscode.TextEditor, line: number): RunTarget {
+    return { uri: editor.document.uri, line, from: line, to: line };
+}
+
+function fileTarget(editor: vscode.TextEditor): RunTarget {
+    return {
+        uri: editor.document.uri,
+        line: editor.selection.active.line,
+        from: 0,
+        to: Math.max(editor.document.lineCount - 1, 0),
+    };
+}
+
+/** Command text without a trailing `//` comment, for comparing echoed and document lines. */
+function commandText(text: string): string {
+    return text.replace(/(^|\s)\/\/.*$/, '').trim();
+}
+
+/**
+ * Stata reports no line numbers, so find the echoed command in the document:
+ * first inside the executed range, then anywhere in the file.
+ */
+function findTargetLine(doc: vscode.TextDocument, errorLines: string[], target: RunTarget): number {
+    const last = Math.max(doc.lineCount - 1, 0);
+    const ranges: [number, number][] = [
+        [Math.max(target.from, 0), Math.min(target.to, last)],
+        [0, last],
+    ];
     for (const eLine of errorLines) {
         const cmdMatch = eLine.match(/^\.\s+(.+)/);
         if (!cmdMatch) {
             continue;
         }
-        const cmd = cmdMatch[1].trim();
-        for (let i = 0; i < doc.lineCount; i++) {
-            if (doc.lineAt(i).text.trim() === cmd) {
-                return i;
+        const cmd = commandText(cmdMatch[1]);
+        if (!cmd) {
+            continue;
+        }
+        for (const [from, to] of ranges) {
+            for (let i = from; i <= to; i++) {
+                if (commandText(doc.lineAt(i).text) === cmd) {
+                    return i;
+                }
             }
         }
     }
-    return Math.min(Math.max(fallbackLine, 0), Math.max(doc.lineCount - 1, 0));
+    return Math.min(Math.max(target.line, 0), last);
 }
 
-async function applyStataDiagnostic(errorMsg: string): Promise<void> {
-    const errorLines = errorMsg.split('\n');
-    const displayMsg = errorLines.filter((line) => !/^r\(\d+\);/.test(line.trim())).join(' ').trim() || errorMsg;
-
-    if (lastRunTarget) {
-        try {
-            const doc = await vscode.workspace.openTextDocument(lastRunTarget.uri);
-            const targetLine = findTargetLine(doc, errorLines, lastRunTarget.line);
-            const diag = new vscode.Diagnostic(
-                doc.lineAt(targetLine).range,
-                displayMsg,
-                vscode.DiagnosticSeverity.Error,
-            );
-            diag.source = 'Stata';
-            diagnosticCollection.set(doc.uri, [diag]);
-            return;
-        } catch {
-            // Fall back to the active editor below.
-        }
-    }
-
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) {
+async function applyStataDiagnostic(event: StataErrorEvent): Promise<void> {
+    // Errors from commands typed in the console have no source line.
+    if (!event.target) {
         return;
     }
-    const targetLine = findTargetLine(editor.document, errorLines, editor.selection.active.line);
-    const diag = new vscode.Diagnostic(
-        editor.document.lineAt(targetLine).range,
-        displayMsg,
-        vscode.DiagnosticSeverity.Error,
-    );
-    diag.source = 'Stata';
-    diagnosticCollection.set(editor.document.uri, [diag]);
+    const errorLines = event.message.split('\n');
+    const displayMsg = errorLines
+        .filter((line) => !/^r\(\d+\);/.test(line.trim()) && !/^(\. |> )/.test(line))
+        .join(' ')
+        .trim() || event.message;
+
+    try {
+        const doc = await vscode.workspace.openTextDocument(event.target.uri);
+        if (doc.lineCount === 0) {
+            return;
+        }
+        const targetLine = findTargetLine(doc, errorLines, event.target);
+        const diag = new vscode.Diagnostic(
+            doc.lineAt(targetLine).range,
+            displayMsg,
+            vscode.DiagnosticSeverity.Error,
+        );
+        diag.source = 'Stata';
+        diagnosticCollection.set(doc.uri, [diag]);
+    } catch {
+        // The document is gone; nothing to annotate.
+    }
 }
 
-let consoleStarting: Promise<boolean> | undefined;
+let consoleStarting: Promise<StataTerminal | undefined> | undefined;
 
-/** Open the console if needed. Concurrent callers share one startup. */
-function ensureConsole(): Promise<boolean> {
+/** Open the console if needed. Concurrent callers share one startup and one terminal. */
+function ensureConsole(): Promise<StataTerminal | undefined> {
     if (terminal && stataTerminal) {
         terminal.show(true);
-        return Promise.resolve(true);
+        return Promise.resolve(stataTerminal);
     }
     if (!consoleStarting) {
         consoleStarting = createConsole().finally(() => { consoleStarting = undefined; });
@@ -145,7 +172,7 @@ function ensureConsole(): Promise<boolean> {
     return consoleStarting;
 }
 
-async function createConsole(): Promise<boolean> {
+async function createConsole(): Promise<StataTerminal | undefined> {
     const { backend, error } = await resolveBackend();
     if (!backend) {
         vscode.window.showErrorMessage(
@@ -159,39 +186,40 @@ async function createConsole(): Promise<boolean> {
                 vscode.commands.executeCommand('workbench.action.openSettings', 'stata.stataPath');
             }
         });
-        return false;
+        return undefined;
     }
 
-    stataTerminal = new StataTerminal(backend);
+    const session = new StataTerminal(backend);
+    stataTerminal = session;
 
     // Graph panel + plots list
-    stataTerminal.onDidDetectGraph((graphPath) => {
+    session.onDidDetectGraph((graphPath) => {
         if (!graphPanel) {
-            graphPanel = new GraphPanel(stataTerminal!.tempDir);
+            graphPanel = new GraphPanel(session.tempDir);
         }
         graphPanel.show(graphPath);
         plotsListPanel.addPlot(graphPath);
     });
 
     // Data viewer (browse)
-    stataTerminal.onDidRequestBrowse(({ csvPath, totalObs }) => {
+    session.onDidRequestBrowse(({ csvPath, totalObs }) => {
         if (!dataPanel) {
-            dataPanel = new DataPanel(stataTerminal!.tempDir);
+            dataPanel = new DataPanel(session.tempDir);
         }
         dataPanel.show(csvPath, totalObs);
     });
 
     // Data + Variables panels auto-update
-    stataTerminal.onDidUpdateVariables((meta) => {
+    session.onDidUpdateVariables((meta) => {
         datasetPanel.update(meta);
         variablesPanel.refreshFromFile(
-            path.join(stataTerminal!.tempDir, '_vars.tsv')
+            path.join(session.tempDir, '_vars.tsv')
         );
         if (meta.obs > 0) {
             const name = meta.filename
                 ? meta.filename.replace(/^.*[/\\]/, '').replace(/\.dta$/i, '')
                 : 'data';
-            statusBarItem.text = `$(database) ${name} (${meta.obs.toLocaleString()} \u00D7 ${meta.vars})`;
+            statusBarItem.text = `$(database) ${name} (${meta.obs.toLocaleString()} × ${meta.vars})`;
             statusBarItem.tooltip = `${meta.filename || 'Current dataset'}\n${meta.obs.toLocaleString()} observations, ${meta.vars} variables${meta.label ? '\n' + meta.label : ''}`;
         } else {
             statusBarItem.text = '$(terminal) Stata';
@@ -199,14 +227,14 @@ async function createConsole(): Promise<boolean> {
     });
 
     // Stored results auto-update
-    stataTerminal.onDidUpdateResults(() => {
+    session.onDidUpdateResults(() => {
         storedResultsPanel.refreshFromFile(
-            path.join(stataTerminal!.tempDir, '_results.tsv')
+            path.join(session.tempDir, '_results.tsv')
         );
     });
 
     // Running indicator — spinner in status bar while Stata is busy
-    stataTerminal.onDidChangeBusy((busy) => {
+    session.onDidChangeBusy((busy) => {
         if (busy) {
             busyStatusItem.text = '$(sync~spin) Running...';
             busyStatusItem.show();
@@ -215,50 +243,84 @@ async function createConsole(): Promise<boolean> {
         }
     });
 
-    stataTerminal.onDidStartExecution((origin) => {
+    session.onDidStartExecution((origin) => {
         if (origin === 'interactive') {
-            lastRunTarget = undefined;
             diagnosticCollection.clear();
         }
     });
 
     // Diagnostics from Stata errors
-    stataTerminal.onDidDetectError((errorMsg) => {
-        void applyStataDiagnostic(errorMsg);
+    session.onDidDetectError((event) => {
+        void applyStataDiagnostic(event);
     });
 
-    terminal = vscode.window.createTerminal({
+    const term = vscode.window.createTerminal({
         name: 'Stata Console',
-        pty: stataTerminal,
+        pty: session,
     });
+    terminal = term;
 
     statusBarItem.text = '$(terminal) Stata';
-    statusBarItem.tooltip = `Stata Console \u2014 ${backend.label}`;
+    statusBarItem.tooltip = `Stata Console — ${backend.label}`;
     vscode.commands.executeCommand('setContext', 'stata.consoleActive', true);
 
     const disposable = vscode.window.onDidCloseTerminal((t) => {
-        if (t === terminal) {
-            stataTerminal?.dispose();
-            stataTerminal = undefined;
-            terminal = undefined;
-            graphPanel?.dispose();
-            graphPanel = undefined;
-            dataPanel?.dispose();
-            dataPanel = undefined;
-            datasetPanel.update();
-            variablesPanel.refreshFromFile('');
-            storedResultsPanel.refreshFromFile('');
-            plotsListPanel.clear();
-            lastRunTarget = undefined;
-            statusBarItem.text = '$(terminal) Stata (inactive)';
-            statusBarItem.tooltip = 'Click to open Stata Console';
-            vscode.commands.executeCommand('setContext', 'stata.consoleActive', false);
+        if (t === term) {
+            teardownConsole(term);
             disposable.dispose();
         }
     });
 
-    terminal.show();
-    return true;
+    term.show();
+    return session;
+}
+
+/** Release everything tied to a console. Safe to call more than once. */
+function teardownConsole(term: vscode.Terminal): void {
+    if (terminal !== term) {
+        return;
+    }
+    stataTerminal?.dispose();
+    stataTerminal = undefined;
+    terminal = undefined;
+    graphPanel?.dispose();
+    graphPanel = undefined;
+    dataPanel?.dispose();
+    dataPanel = undefined;
+    datasetPanel.update();
+    variablesPanel.refreshFromFile('');
+    storedResultsPanel.refreshFromFile('');
+    plotsListPanel.clear();
+    diagnosticCollection.clear();
+    busyStatusItem.hide();
+    statusBarItem.text = '$(terminal) Stata (inactive)';
+    statusBarItem.tooltip = 'Click to open Stata Console';
+    vscode.commands.executeCommand('setContext', 'stata.consoleActive', false);
+}
+
+function workingDirFor(doc: vscode.TextDocument): string | undefined {
+    return doc.uri.scheme === 'file' ? path.dirname(doc.fileName) : undefined;
+}
+
+/** Send code to the console. The caller captures `target` before any await. */
+function runCode(editor: vscode.TextEditor, code: string, target: RunTarget): void {
+    if (code.trim() === '') { return; }
+    const workingDir = workingDirFor(editor.document);
+    void ensureConsole().then((session) => session?.sendCode(code, workingDir, target));
+}
+
+function runWholeFile(editor: vscode.TextEditor): void {
+    const doc = editor.document;
+    const target = fileTarget(editor);
+    const workingDir = workingDirFor(doc);
+    if (doc.uri.scheme !== 'file') {
+        // Untitled or virtual documents have no path Stata could open.
+        runCode(editor, doc.getText(), target);
+        return;
+    }
+    void doc.save().then(() => ensureConsole()).then((session) => {
+        session?.sendCode(`do ${stataQuote(doc.fileName)}`, workingDir, target);
+    });
 }
 
 export function activate(context: vscode.ExtensionContext) {
@@ -325,23 +387,10 @@ export function activate(context: vscode.ExtensionContext) {
             const editor = vscode.window.activeTextEditor;
             if (!editor) { return; }
             diagnosticCollection.clear();
-            const fileDir = path.dirname(editor.document.fileName);
             if (!editor.selection.isEmpty) {
-                const code = editor.document.getText(editor.selection);
-                if (code.trim() === '') { return; }
-                void ensureConsole().then((ok) => {
-                    if (!ok) { return; }
-                    recordRunTarget(editor, editor.selection.start.line);
-                    stataTerminal!.sendCode(code, fileDir);
-                });
+                runCode(editor, editor.document.getText(editor.selection), selectionTarget(editor));
             } else {
-                const filePath = editor.document.fileName;
-                if (!filePath) { return; }
-                void editor.document.save().then(async () => {
-                    if (!(await ensureConsole())) { return; }
-                    recordRunTarget(editor, editor.selection.active.line);
-                    stataTerminal!.sendCode(`do "${toStataPath(filePath)}"`, fileDir);
-                });
+                runWholeFile(editor);
             }
         })
     );
@@ -366,20 +415,10 @@ export function activate(context: vscode.ExtensionContext) {
                 // Only send non-empty, non-comment lines to Stata
                 const trimmed = code.trim();
                 if (trimmed === '' || trimmed.startsWith('*') || trimmed.startsWith('//')) { return; }
-                void ensureConsole().then((ok) => {
-                    if (!ok) { return; }
-                    recordRunTarget(editor, lineNum);
-                    stataTerminal!.sendCode(code, path.dirname(editor.document.fileName));
-                });
+                runCode(editor, code, lineTarget(editor, lineNum));
             } else {
                 // Has selection — run it
-                const code = editor.document.getText(editor.selection);
-                if (code.trim() === '') { return; }
-                void ensureConsole().then((ok) => {
-                    if (!ok) { return; }
-                    recordRunTarget(editor, editor.selection.start.line);
-                    stataTerminal!.sendCode(code, path.dirname(editor.document.fileName));
-                });
+                runCode(editor, editor.document.getText(editor.selection), selectionTarget(editor));
             }
         })
     );
@@ -389,20 +428,14 @@ export function activate(context: vscode.ExtensionContext) {
             const editor = vscode.window.activeTextEditor;
             if (!editor) { vscode.window.showWarningMessage('No file is open.'); return; }
             diagnosticCollection.clear();
-            const filePath = editor.document.fileName;
-            if (!filePath) { return; }
-            void editor.document.save().then(async () => {
-                if (!(await ensureConsole())) { return; }
-                recordRunTarget(editor, editor.selection.active.line);
-                stataTerminal!.sendCode(`do "${toStataPath(filePath)}"`, path.dirname(filePath));
-            });
+            runWholeFile(editor);
         })
     );
 
     context.subscriptions.push(
         vscode.commands.registerCommand('stata.browse', async () => {
-            if (!(await ensureConsole())) { return; }
-            stataTerminal!.handleBrowse('');
+            const session = await ensureConsole();
+            session?.handleBrowse('');
         })
     );
 
@@ -450,11 +483,16 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Restart Stata
     context.subscriptions.push(
-        vscode.commands.registerCommand('stata.restartStata', () => {
-            if (terminal) {
-                terminal.dispose(); // triggers cleanup via onDidCloseTerminal
+        vscode.commands.registerCommand('stata.restartStata', async () => {
+            if (consoleStarting) {
+                await consoleStarting;
             }
-            setTimeout(() => { void ensureConsole(); }, 500);
+            const old = terminal;
+            if (old) {
+                teardownConsole(old);
+                old.dispose();
+            }
+            await ensureConsole();
         })
     );
 
@@ -493,6 +531,7 @@ export function deactivate() {
     variablesPanel?.dispose();
     storedResultsPanel?.dispose();
     plotsListPanel?.dispose();
+    busyStatusItem?.hide();
     stataTerminal?.dispose();
     terminal?.dispose();
 }
