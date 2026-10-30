@@ -221,8 +221,8 @@ async function createConsole(): Promise<StataTerminal | undefined> {
         if (!graphPanel) {
             graphPanel = new GraphPanel(session.tempDir);
         }
+        // The plots list follows the shared plot history store.
         graphPanel.show(graphPath);
-        plotsListPanel.addPlot(graphPath);
     });
 
     // Data viewer (browse)
@@ -476,6 +476,11 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('stata.plotClear', () => {
             graphPanel?.clearAll();
             plotsListPanel.clear();
+        }),
+        vscode.commands.registerCommand('stata.deletePlot', (entry?: { index: number }) => {
+            if (entry && entry.index >= 0) {
+                plotsListPanel.deletePlot(entry.index);
+            }
         }),
         vscode.commands.registerCommand('stata.showPlot', (index: number) => {
             // Called from plots list panel — navigate to specific plot

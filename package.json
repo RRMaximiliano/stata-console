@@ -154,6 +154,18 @@
         "enablement": "stata.consoleActive"
       },
       {
+        "command": "stata.deletePlot",
+        "title": "Delete Plot",
+        "category": "Stata",
+        "icon": "$(close)"
+      },
+      {
+        "command": "stata._variablesFilterSort",
+        "title": "Filter or Sort Variables",
+        "category": "Stata",
+        "icon": "$(filter)"
+      },
+      {
         "command": "stata.refreshVariables",
         "title": "Refresh Variables",
         "category": "Stata",
@@ -168,7 +180,29 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "stata.deletePlot",
+          "when": "false"
+        },
+        {
+          "command": "stata._variablesFilterSort",
+          "when": "false"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "stata.deletePlot",
+          "when": "view == stataPlotsList && viewItem == stataPlotItem",
+          "group": "inline"
+        }
+      ],
       "view/title": [
+        {
+          "command": "stata._variablesFilterSort",
+          "when": "view == stataVariables",
+          "group": "navigation@0"
+        },
         {
           "command": "stata.refreshVariables",
           "when": "view == stataVariables",
