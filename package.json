@@ -297,7 +297,11 @@
         "stata.backend": {
           "type": "string",
           "default": "auto",
-          "enum": ["auto", "console", "pystata"],
+          "enum": [
+            "auto",
+            "console",
+            "pystata"
+          ],
           "enumDescriptions": [
             "Use PyStata on Windows and the console binary on macOS/Linux.",
             "Use the Stata console binary (macOS/Linux only).",
@@ -348,7 +352,10 @@
         "stata.workingDirectory": {
           "type": "string",
           "default": "unchanged",
-          "enum": ["unchanged", "fileDirectory"],
+          "enum": [
+            "unchanged",
+            "fileDirectory"
+          ],
           "enumDescriptions": [
             "Leave Stata's working directory alone, like Stata's own Do-file Editor. Use cd or globals in your do-files to set paths.",
             "Before each run, cd to the folder of the do-file being run, so relative paths resolve against it. The change persists in the session."
@@ -399,10 +406,10 @@
     "package:vsix": "vsce package"
   },
   "devDependencies": {
-    "@vscode/vsce": "^3.6.2",
     "@eslint/js": "^9.39.4",
     "@types/node": "^18.0.0",
     "@types/vscode": "^1.80.0",
+    "@vscode/vsce": "^4.1.0",
     "eslint": "^9.39.4",
     "globals": "^17.4.0",
     "typescript": "^5.3.0",
