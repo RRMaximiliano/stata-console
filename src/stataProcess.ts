@@ -41,6 +41,9 @@ export class ConsoleBackend extends BaseBackend {
         this.process.stdout?.setEncoding('utf8');
         this.process.stdout?.on('data', (data: string) => this.handleStdout(data));
 
+        // Writing after Stata exits raises EPIPE here; `exit` reports the real cause.
+        this.process.stdin?.on('error', () => { /* ignore */ });
+
         this.process.stderr?.setEncoding('utf8');
         this.process.stderr?.on('data', (data: string) => {
             this.fire('stderr', data.replace(/\r\n/g, '\n'));
