@@ -1,0 +1,56 @@
+# Publishes to the VS Code Marketplace with Trusted Publishing (OIDC): no token
+# is stored anywhere. The Marketplace trusts this workflow file in this repo,
+# set up once under the publisher's "Trusted Publishing" page.
+#
+# Release: bump "version" in package.json and CHANGELOG.md, merge to main, then
+#   git tag v0.4.1 && git push origin v0.4.1
+# Or re-run for the current version: gh workflow run publish.yml
+name: Publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the GitHub release
+  id-token: write   # Marketplace Trusted Publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+
+      - name: Check tag matches package.json
+        id: version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+
+      - run: npx vsce package -o stata-console-${{ steps.version.outputs.version }}.vsix
+      - run: npx vsce publish --oidc --packagePath stata-console-${{ steps.version.outputs.version }}.vsix
+
+      - name: Attach to GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.version.outputs.version }}
+          VSIX: stata-console-${{ steps.version.outputs.version }}.vsix
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$VSIX" --clobber
+          else
+            awk '/^## /{n++} n==1' CHANGELOG.md > notes.md
+            gh release create "$TAG" "$VSIX" --title "$TAG" --notes-file notes.md --target "$GITHUB_SHA"
+          fi
