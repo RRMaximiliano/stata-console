@@ -250,6 +250,27 @@
     "configuration": {
       "title": "Stata Console",
       "properties": {
+        "stata.backend": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "console", "pystata"],
+          "enumDescriptions": [
+            "Use PyStata on Windows and the console binary on macOS/Linux.",
+            "Use the Stata console binary (macOS/Linux only).",
+            "Use Python and PyStata (Stata 17+ and Python 3.8+ required)."
+          ],
+          "description": "Backend for new Stata console sessions. Restart the Stata console after changing this setting."
+        },
+        "stata.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python executable for PyStata, without arguments (paths containing spaces are supported). Requires Python 3.8+ and 64-bit Python on Windows. Leave empty to use the VS Code Python extension's active environment, then py -3 on Windows or python3/python on PATH."
+        },
+        "stata.installDir": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Stata 17+ installation directory containing utilities/pystata, for example C:\\Program Files\\Stata19 or /Applications/StataNow. Leave empty to infer it from the Stata executable."
+        },
         "stata.stataPath": {
           "type": "string",
           "default": "",

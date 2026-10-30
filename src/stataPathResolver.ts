@@ -1,3 +1,5 @@
+import * as path from 'path';
+
 export type StataEdition = 'mp' | 'se' | 'be';
 
 export interface ResolverEnvironment {
@@ -6,6 +8,7 @@ export interface ResolverEnvironment {
     isFile(path: string): boolean;
     isDirectory(path: string): boolean;
     listDir(path: string): string[];
+    realpath(path: string): string | undefined;
     execFile(command: string, args: string[]): string | undefined;
 }
 
@@ -21,18 +24,59 @@ export interface StataPathDiagnostics {
 }
 
 export function editionOrder(edition?: string): StataEdition[] {
-    return edition === 'SE' ? ['se', 'mp', 'be']
-        : edition === 'BE' ? ['be', 'se', 'mp']
+    return edition?.toUpperCase() === 'SE' ? ['se', 'mp', 'be']
+        : edition?.toUpperCase() === 'BE' ? ['be', 'se', 'mp']
         : ['mp', 'se', 'be'];
 }
 
-export function binaryNames(edition?: string): string[] {
+export function binaryNames(edition?: string, platform?: NodeJS.Platform): string[] {
     const names: string[] = [];
     for (const ed of editionOrder(edition)) {
-        names.push(`stata-${ed}`);
+        if (platform === 'win32') {
+            const suffix = ed.toUpperCase();
+            names.push(`Stata${suffix}-64.exe`, `Stata${suffix}.exe`);
+            if (ed === 'be') {
+                names.push('Stata-64.exe', 'Stata.exe');
+            }
+        } else {
+            names.push(`stata-${ed}`);
+        }
     }
-    names.push('stata');
+    if (platform !== 'win32') {
+        names.push('stata');
+    }
     return Array.from(new Set(names));
+}
+
+function platformPath(env: ResolverEnvironment): typeof path.posix {
+    return env.platform === 'win32' ? path.win32 : path.posix;
+}
+
+export function editionFromExecutable(executablePath: string): StataEdition | undefined {
+    const name = pathBasename(executablePath).toLowerCase();
+    if (/^stata-?mp(?:m1)?(?:-64)?(?:\.exe)?$/.test(name)) {
+        return 'mp';
+    }
+    if (/^stata-?se(?:-64)?(?:\.exe)?$/.test(name)) {
+        return 'se';
+    }
+    if (/^stata(?:-?be|-?ic)?(?:-64)?(?:\.exe)?$/.test(name)) {
+        return 'be';
+    }
+    return undefined;
+}
+
+/** Follow terminal-utility symlinks before locating Stata's utilities directory. */
+export function resolveStataInstallDir(executablePath: string, env: ResolverEnvironment): string {
+    const paths = platformPath(env);
+    const resolved = env.realpath(executablePath) ?? executablePath;
+    const bundle = env.platform === 'darwin' ? resolved.match(/^(.*)\/[^/]+\.app\/Contents\/MacOS\/[^/]+$/i) : undefined;
+    if (bundle) {
+        return bundle[1];
+    }
+    const dir = paths.dirname(resolved);
+    const parent = paths.dirname(dir);
+    return env.platform !== 'win32' && env.isDirectory(paths.join(parent, 'utilities', 'pystata')) ? parent : dir;
 }
 
 export function expandUserPath(inputPath: string, homeDir: string): string {
@@ -40,14 +84,14 @@ export function expandUserPath(inputPath: string, homeDir: string): string {
     if (trimmed === '~') {
         return homeDir;
     }
-    if (trimmed.startsWith('~/')) {
+    if (/^~[/\\]/.test(trimmed)) {
         return homeDir + trimmed.slice(1);
     }
     return trimmed;
 }
 
 export function pathBasename(filePath: string): string {
-    const normalized = filePath.replace(/\/+$/, '');
+    const normalized = filePath.replace(/\\/g, '/').replace(/\/+$/, '');
     const idx = normalized.lastIndexOf('/');
     return idx >= 0 ? normalized.slice(idx + 1) : normalized;
 }
@@ -78,13 +122,14 @@ export function resolveConfiguredPath(
     env: ResolverEnvironment,
 ): string | undefined {
     const normalized = expandUserPath(configuredPath, env.homeDir);
+    const paths = platformPath(env);
 
     if (env.isFile(normalized)) {
         return normalized;
     }
 
     if (env.platform === 'darwin' && env.isDirectory(normalized)) {
-        if (normalized.endsWith('.app')) {
+        if (normalized.toLowerCase().endsWith('.app')) {
             return existingExecutable(appBundleExecutableCandidates(normalized, edition), env);
         }
 
@@ -92,11 +137,16 @@ export function resolveConfiguredPath(
             return existingExecutable(binaryNames(edition).map((name) => `${normalized}/${name}`), env);
         }
 
-        return existingExecutable(binaryNames(edition).map((name) => `${normalized}/${name}`), env);
+        const apps = editionOrder(edition).flatMap((ed) => {
+            const appNames = ed === 'mp' ? ['StataMP.app', 'StataMPM1.app']
+                : ed === 'se' ? ['StataSE.app'] : ['StataBE.app', 'Stata.app'];
+            return appNames.flatMap((app) => appBundleExecutableCandidates(paths.join(normalized, app), edition));
+        });
+        return existingExecutable([...apps, ...binaryNames(edition).map((name) => paths.join(normalized, name))], env);
     }
 
     if (env.isDirectory(normalized)) {
-        return existingExecutable(binaryNames(edition).map((name) => `${normalized}/${name}`), env);
+        return existingExecutable(binaryNames(edition, env.platform).map((name) => paths.join(normalized, name)), env);
     }
 
     return undefined;
@@ -107,10 +157,12 @@ export function findExecutablesOnPath(
     env: ResolverEnvironment,
 ): string[] {
     const matches: string[] = [];
-    for (const name of binaryNames(edition)) {
-        const resolved = env.execFile('which', [name])?.trim();
-        if (resolved && env.isFile(resolved)) {
-            matches.push(resolved);
+    for (const name of binaryNames(edition, env.platform)) {
+        const resolved = env.execFile(env.platform === 'win32' ? 'where' : 'which', [name]);
+        for (const candidate of resolved?.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) ?? []) {
+            if (env.isFile(candidate)) {
+                matches.push(candidate);
+            }
         }
     }
     return Array.from(new Set(matches));
@@ -121,6 +173,28 @@ export function buildSearchPaths(
     env: ResolverEnvironment,
 ): string[] {
     const paths = new Set<string>();
+
+    if (env.platform === 'win32') {
+        const join = path.win32.join;
+        // Also scan the user's drive when Windows is installed outside C:.
+        const drives = Array.from(new Set(['C:\\', path.win32.parse(env.homeDir).root])).filter(Boolean);
+        for (const drive of drives) {
+            for (const folder of ['Program Files', 'Program Files (x86)']) {
+                const root = join(drive, folder);
+                const dirs = new Set(['Stata19', 'StataNow19', 'Stata18', 'StataNow18', 'Stata17', 'StataNow17', 'Stata']);
+                for (const entry of env.listDir(root).filter((entry) => /^stata/i.test(entry)).sort().reverse()) {
+                    if (env.isDirectory(join(root, entry))) {
+                        dirs.add(entry);
+                    }
+                }
+                for (const dir of dirs) {
+                    for (const name of binaryNames(edition, env.platform)) {
+                        paths.add(join(root, dir, name));
+                    }
+                }
+            }
+        }
+    }
 
     if (env.platform === 'darwin') {
         const macDirs = ['/Applications/StataNow', '/Applications/Stata'];
@@ -192,7 +266,7 @@ export function getStataPathHelp(platform: NodeJS.Platform): string {
     if (platform === 'linux') {
         return 'Auto-detect could not find a Stata console binary. Set "stata.stataPath" to an executable such as stata-mp, stata-se, or the full install path.';
     }
-    return 'This extension currently requires a Stata console executable. Set "stata.stataPath" manually.';
+    return 'Stata 17+ is required for Windows via PyStata. Set "stata.stataPath" to StataMP-64.exe, StataSE-64.exe, or StataBE-64.exe, or set "stata.installDir" to the Stata installation directory.';
 }
 
 export function resolveStataPath(

@@ -12,7 +12,7 @@ import { StataHoverProvider } from './hoverProvider';
 import { StataLinkProvider } from './linkProvider';
 import { StataOutlineProvider } from './outlineProvider';
 import { StataDefinitionProvider } from './definitionProvider';
-import { getStataPathDiagnostics, resolveBackend } from './config';
+import { getStataPathDiagnostics, getBackendDiagnostics, resolveBackend, type BackendDiagnostics } from './config';
 import { toStataPath } from './backend';
 import { registerSthlpViewer } from './sthlpViewer';
 
@@ -32,8 +32,8 @@ let variablesPanel: VariablesPanel;
 let storedResultsPanel: StoredResultsPanel;
 let plotsListPanel: PlotsListPanel;
 
-function formatPathDiagnostics(): string {
-    const diagnostics = getStataPathDiagnostics();
+async function formatPathDiagnostics(diagnostics = getStataPathDiagnostics(), backend?: BackendDiagnostics): Promise<string> {
+    backend ??= await getBackendDiagnostics(diagnostics.selectedPath);
     const lines = [
         'Stata Path Diagnostics',
         `Platform: ${diagnostics.platform}`,
@@ -41,6 +41,12 @@ function formatPathDiagnostics(): string {
         `Configured stata.stataPath: ${diagnostics.configuredPath || '(empty)'}`,
         `Resolved configured path: ${diagnostics.resolvedConfiguredPath || '(not resolved)'}`,
         `Selected path: ${diagnostics.selectedPath || '(none)'}`,
+        `Backend: ${backend.backend} (stata.backend: ${backend.configuredBackend})`,
+        `Install directory: ${backend.installDir || '(not resolved)'}`,
+        `utilities/pystata exists: ${backend.pystataExists ? 'yes' : 'no'}`,
+        `Python path: ${backend.python?.path || '(not found)'}`,
+        `Python version: ${backend.python ? `${backend.python.version} (${backend.python.bits}-bit)` : '(unknown)'}`,
+        ...(backend.error ? [`Python discovery: ${backend.error}`] : []),
         '',
         'PATH matches:',
         ...(diagnostics.pathMatches.length > 0 ? diagnostics.pathMatches.map((match) => `  ${match}`) : ['  (none)']),
@@ -55,15 +61,17 @@ function formatPathDiagnostics(): string {
 
 async function showPathDiagnostics(): Promise<void> {
     const diagnostics = getStataPathDiagnostics();
-    const report = formatPathDiagnostics();
+    const backend = await getBackendDiagnostics(diagnostics.selectedPath);
+    const report = await formatPathDiagnostics(diagnostics, backend);
     outputChannel.clear();
     outputChannel.appendLine(report);
     outputChannel.show(true);
 
-    const message = diagnostics.selectedPath
+    const detected = diagnostics.selectedPath || backend.pystataExists;
+    const message = detected
         ? 'Stata path diagnostics written to the "Stata Console" output channel.'
         : 'No Stata executable was detected. See the "Stata Console" output channel for details.';
-    const choice = diagnostics.selectedPath
+    const choice = detected
         ? await vscode.window.showInformationMessage(message, 'Copy Report')
         : await vscode.window.showWarningMessage(message, 'Copy Report');
 
