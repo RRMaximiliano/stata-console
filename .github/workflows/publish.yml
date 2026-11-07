@@ -3,8 +3,8 @@
 # set up once under the publisher's "Trusted Publishing" page.
 #
 # Also publishes to Open VSX (open-vsx.org), the store Positron, Cursor and
-# VSCodium search. Open VSX needs an access token, stored as the repo secret
-# OVSX_PAT. Without that secret the step is skipped with a warning.
+# VSCodium search, the same way: the rrmaximiliano namespace trusts this
+# workflow under "Trusted Publishers" in the Open VSX settings.
 #
 # Release: bump "version" in package.json and CHANGELOG.md, merge to main, then
 #   git tag v0.4.1 && git push origin v0.4.1
@@ -18,7 +18,7 @@ on:
 
 permissions:
   contents: write   # create the GitHub release
-  id-token: write   # Marketplace Trusted Publishing
+  id-token: write   # Marketplace and Open VSX Trusted Publishing
 
 jobs:
   publish:
@@ -47,15 +47,7 @@ jobs:
       - run: npx vsce publish --oidc --skip-duplicate --packagePath stata-console-${{ steps.version.outputs.version }}.vsix
 
       - name: Publish to Open VSX
-        env:
-          OVSX_PAT: ${{ secrets.OVSX_PAT }}
-          VSIX: stata-console-${{ steps.version.outputs.version }}.vsix
-        run: |
-          if [ -z "$OVSX_PAT" ]; then
-            echo "::warning::OVSX_PAT secret is not set; skipping Open VSX"
-            exit 0
-          fi
-          npx ovsx publish --packagePath "$VSIX" --skip-duplicate
+        run: npx ovsx publish --trusted-publishing --skip-duplicate --packagePath stata-console-${{ steps.version.outputs.version }}.vsix
 
       - name: Attach to GitHub release
         env:
