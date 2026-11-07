@@ -2,6 +2,10 @@
 # is stored anywhere. The Marketplace trusts this workflow file in this repo,
 # set up once under the publisher's "Trusted Publishing" page.
 #
+# Also publishes to Open VSX (open-vsx.org), the store Positron, Cursor and
+# VSCodium search. Open VSX needs an access token, stored as the repo secret
+# OVSX_PAT. Without that secret the step is skipped with a warning.
+#
 # Release: bump "version" in package.json and CHANGELOG.md, merge to main, then
 #   git tag v0.4.1 && git push origin v0.4.1
 # Or re-run for the current version: gh workflow run publish.yml
@@ -40,7 +44,18 @@ jobs:
           fi
 
       - run: npx vsce package -o stata-console-${{ steps.version.outputs.version }}.vsix
-      - run: npx vsce publish --oidc --packagePath stata-console-${{ steps.version.outputs.version }}.vsix
+      - run: npx vsce publish --oidc --skip-duplicate --packagePath stata-console-${{ steps.version.outputs.version }}.vsix
+
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          VSIX: stata-console-${{ steps.version.outputs.version }}.vsix
+        run: |
+          if [ -z "$OVSX_PAT" ]; then
+            echo "::warning::OVSX_PAT secret is not set; skipping Open VSX"
+            exit 0
+          fi
+          npx ovsx publish --packagePath "$VSIX" --skip-duplicate
 
       - name: Attach to GitHub release
         env:

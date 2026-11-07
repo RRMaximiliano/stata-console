@@ -105,9 +105,12 @@ Right now, this extension is slower than regular Stata. That's it, that's the me
 **From the Marketplace:**
 Search for "Stata Console" in the VS Code Extensions panel (`Cmd+Shift+X`), or visit [the marketplace page](https://marketplace.visualstudio.com/items?itemName=rrmaximiliano.stata-console).
 
+**In Positron, Cursor, or VSCodium:**
+These editors use [Open VSX](https://open-vsx.org/extension/rrmaximiliano/stata-console) instead of Microsoft's Marketplace. Search for "Stata Console" in their Extensions panel.
+
 **From a `.vsix` file:**
-Download the latest `.vsix` from [GitHub Releases](https://github.com/RRMaximiliano/stata-console/releases), then run:
-``` 
+Download the latest `.vsix` from [GitHub Releases](https://github.com/RRMaximiliano/stata-console/releases), then run (or use **Install from VSIX…** in the Extensions panel's `⋯` menu):
+```
 code --install-extension stata-console-0.4.0.vsix
 ```
 

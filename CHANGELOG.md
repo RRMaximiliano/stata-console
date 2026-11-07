@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Published to Open VSX as well, so the extension can be installed from Positron, Cursor, and VSCodium.
+
 ## 0.4.0
 
 ### Windows support
